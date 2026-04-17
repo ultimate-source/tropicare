@@ -1,0 +1,245 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+x-common-env: &common-env
+  DATABASE_URL:       postgresql://tropicare:tropicare@postgres:5432/tropicare
+  REDIS_URL:          redis://redis:6379/0
+  MONGODB_URI:        mongodb://mongodb:27017/tropicare?replicaSet=rs0
+  MONGODB_DB:         tropicare
+  MCP_URL:            http://mcp-tools:8001
+  MODEL:              claude-sonnet-4-20250514
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     tropicare
+      POSTGRES_PASSWORD: tropicare
+      POSTGRES_DB:       tropicare
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tropicare"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── MongoDB ──────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7-jammy
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── MongoDB replica set init (runs once) ────────────────────────────────────
+  mongo-init:
+    image: mongo:7-jammy
+    depends_on:
+      mongodb: {condition: service_healthy}
+    restart: "no"
+    entrypoint: >
+      mongosh --host mongodb:27017 --eval '
+        try { rs.status() }
+        catch(e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] }) }
+      '
+
+  # ── MCP Tool Server ─────────────────────────────────────────────────────────
+  mcp-tools:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+      mongodb:  {condition: service_healthy}
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Gateway (FastAPI) ───────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY}
+      CORS_ORIGINS:      '["http://localhost:3000","https://tropicare.health"]'
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public.pem
+    secrets:
+      - jwt_public.pem
+    depends_on:
+      postgres:  {condition: service_healthy}
+      redis:     {condition: service_healthy}
+      mcp-tools: {condition: service_healthy}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Ingestion Worker (ARQ) ──────────────────────────────────────────────────
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - kb_raw:/tmp/kb_raw
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+      mongodb:  {condition: service_healthy}
+
+  # ── Alembic migrations (runs once, exits) ───────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql://tropicare:tropicare@postgres:5432/tropicare
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+
+  # ── Next.js Frontend ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://gateway:8000
+    depends_on:
+      gateway: {condition: service_healthy}
+    ports:
+      - "3000:3000"
+
+  # ── Jaeger (distributed tracing) ─────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+
+  # ── Prometheus + Grafana ──────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    restart: unless-stopped
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: tropicare
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+
+volumes:
+  pg_data:
+  redis_data:
+  mongo_data:
+  prom_data:
+  grafana_data:
+  kb_raw:
+
+secrets:
+  jwt_public.pem:
+    file: ./keys/public.pem
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# docker/Dockerfile.gateway
+# ─────────────────────────────────────────────────────────────────────────────
+# FROM python:3.12-slim
+#
+# WORKDIR /app
+# RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# COPY requirements/gateway.txt requirements.txt
+# RUN pip install --no-cache-dir -r requirements.txt
+# COPY . .
+# CMD ["uvicorn", "tropicare_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# docker/Dockerfile.mcp
+# ─────────────────────────────────────────────────────────────────────────────
+# FROM python:3.12-slim
+# WORKDIR /app
+# COPY requirements/mcp.txt requirements.txt
+# RUN pip install --no-cache-dir -r requirements.txt
+# COPY . .
+# CMD ["uvicorn", "tropicare_tools.server:app", "--host", "0.0.0.0", "--port", "8001"]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# docker/Dockerfile.worker
+# ─────────────────────────────────────────────────────────────────────────────
+# FROM python:3.12-slim
+# RUN apt-get update && apt-get install -y --no-install-recommends libmupdf-dev && rm -rf /var/lib/apt/lists/*
+# WORKDIR /app
+# COPY requirements/worker.txt requirements.txt
+# RUN pip install --no-cache-dir -r requirements.txt
+# COPY . .
+# CMD ["arq", "tropicare_ingestion.worker.WorkerSettings"]

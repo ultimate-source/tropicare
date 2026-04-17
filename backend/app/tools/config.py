@@ -1,4 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# backend/main.py — Legacy entry point (gateway/main.py is the primary app)
+# backend/app/tools/config.py — Re-export settings for MCP tools server
 # ─────────────────────────────────────────────────────────────────────────────
-from app.gateway.main import app  # noqa: F401 — re-export the FastAPI app
+from backend.app.config.settings import settings
+
+__all__ = ["settings"]
