@@ -13,7 +13,7 @@ export function CitationDrawer({ open, onClose, citations }: Props) {
     <div className="fixed inset-y-0 right-0 z-50 flex w-80 flex-col bg-background border-l shadow-xl">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="font-semibold text-sm">Sources ({citations.length})</h2>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg">✕</button>
+        <button onClick={onClose} aria-label="Fermer le panneau des sources" className="text-muted-foreground hover:text-foreground text-lg">✕</button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {citations.map(c => (

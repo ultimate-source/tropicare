@@ -36,7 +36,7 @@ export const api = {
 
   // ── Sessions ────────────────────────────────────────────────────────────────
   sessions: {
-    create: (patientContext: Record<string, unknown> = {}, language = "fr") =>
+    create: (patientContext: Record<string, unknown> | object = {}, language = "fr") =>
       request<{ session_id: string }>("/api/sessions", {
         method: "POST",
         body: JSON.stringify({ patient_context: patientContext, language }),
@@ -96,11 +96,16 @@ export interface KBDocument {
 }
 
 export interface AnalyticsSummary {
-  total_sessions:    number
-  total_turns:       number
-  top_diseases:      { disease: string; count: number }[]
-  p95_latency_ms:    number
-  citation_rate:     number
-  feedback_correct:  number
-  feedback_total:    number
+  total_sessions:       number
+  total_turns:          number
+  top_diseases:         { disease: string; count: number }[]
+  p95_latency_ms:       number
+  p50_latency_ms:       number
+  citation_rate:        number
+  emergency_rate:       number
+  active_users_7d:      number
+  feedback:             { correct: number; total: number }
+  feedback_correct:     number
+  feedback_total:       number
+  guideline_adherence:  number | null
 }

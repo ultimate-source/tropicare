@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -13,7 +14,7 @@ from typing import Any, AsyncIterator
 from ..agents.base import MCPClient, AgentSpan
 from ..agents.intake import IntakeAgent
 from ..agents.diagnostic import DiagnosticAgent
-from ..agents.antibiotherapy import AntibiotherapyAgent
+from ..agents.antibiotherapy import AntibiotherapyAgent, _AMR_RESISTANCE_THRESHOLD
 from ..agents.validation import ValidationAgent
 from ..models.schemas import PatientContext, ConsultationResponse
 from .session import SessionStore
@@ -123,8 +124,12 @@ class Orchestrator:
                 traces.append(diag_span)
 
                 if diag_result is None:
-                    yield {"type": "error", "message": "Erreur agent diagnostique — résultat partiel"}
+                    yield {"type": "error", "message": _localized_error(language)}
                     diag_result = {}
+
+                # Emit tool failure warnings from diagnostic agent
+                for tw in diag_result.get("_tool_warnings", []):
+                    yield {"type": "validation", "verdict": "WARN", "annotations": [tw]}
 
                 # Emit emergency flags first
                 for flag in diag_result.get("emergency_flags", []):
@@ -179,6 +184,10 @@ class Orchestrator:
                     traces.append(anti_span)
 
                     if anti_result:
+                        # Emit tool failure warnings from antibiotherapy agent
+                        for tw in anti_result.get("_tool_warnings", []):
+                            yield {"type": "validation", "verdict": "WARN", "annotations": [tw]}
+
                         # Validate antibiotherapy
                         anti_val = await self._val.run_validation(
                             agent_output=anti_result,
@@ -204,12 +213,26 @@ class Orchestrator:
                                     "annotations": anti_val["annotations"],
                                 }
 
-            # ── 5. Persist turn ──────────────────────────────────────────────
+            # ── 5. Generate warnings and collect references ────────────────
+            local_diag = diag_result if 'diag_result' in dir() else None
+            local_anti = anti_result if 'anti_result' in dir() else None
+
+            warnings = _generate_warnings(local_diag, local_anti)
+            diag_cits = (local_diag or {}).get("citations", [])
+            anti_cits = (local_anti or {}).get("citations", [])
+            references = _collect_references(diag_cits, anti_cits)
+
+            if warnings:
+                yield {"type": "warnings", "warnings": warnings}
+
+            # ── 6. Persist turn ──────────────────────────────────────────────
             turn_record = {
                 "turn_id": turn_id,
                 "query":   query,
-                "diag":    diag_result if 'diag_result' in dir() else None,
-                "anti":    anti_result if 'anti_result' in dir() else None,
+                "diag":    local_diag,
+                "anti":    local_anti,
+                "warnings": warnings,
+                "references": references,
             }
             await self._cfg.session_store.append_turn(session_id, turn_record)
             await self._audit(session_id, turn_id, "ok", turn_record, t0, traces)
@@ -220,7 +243,8 @@ class Orchestrator:
             log.info("Turn %s cancelled by client", turn_id)
         except Exception as exc:
             log.error("Orchestrator error on turn %s: %s", turn_id, exc, exc_info=True)
-            yield {"type": "error", "message": "Erreur interne — veuillez réessayer"}
+            error_msg = _localized_error(language, exc)
+            yield {"type": "error", "message": error_msg}
             await self._audit(session_id, turn_id, "error", {"error": str(exc)}, t0)
 
     # ── Antibiotherapy-only mode ──────────────────────────────────────────────
@@ -296,4 +320,142 @@ def _is_emergency_query(query: str, ctx: dict) -> bool:
     ]
     text = (query + " ".join(s.get("text", "") for s in ctx.get("symptoms", []))).lower()
     return any(t in text for t in emergency_terms)
+
+
+# ── Standalone helpers (used by property tests) ──────────────────────────────
+
+
+def _localized_error(language: str = "fr", exc: Exception | None = None) -> str:
+    """Return a structured, clinician-facing error message in the session language.
+
+    Used when all retries are exhausted or an agent fails completely.
+    """
+    if language == "en":
+        return (
+            "Internal error — the clinical analysis could not be completed. "
+            "Please retry your request. If the problem persists, contact technical support."
+        )
+    # Default: French
+    return (
+        "Erreur interne — l'analyse clinique n'a pas pu être complétée. "
+        "Veuillez réessayer votre requête. Si le problème persiste, contactez le support technique."
+    )
+
+
+def order_events(events: list[dict]) -> list[dict]:
+    """Reorder SSE event dicts so all emergency_flag events precede all
+    differential_item events.  Other event types keep their relative order
+    with respect to each other and are placed after emergency flags but
+    before differential items when they originally appeared between the two
+    groups.
+
+    The simple invariant: in the returned list, every ``emergency_flag``
+    event has a lower index than every ``differential_item`` event.
+    """
+    emergency_flags: list[dict] = []
+    differential_items: list[dict] = []
+    others: list[dict] = []
+
+    for ev in events:
+        etype = ev.get("type", "")
+        if etype == "emergency_flag":
+            emergency_flags.append(ev)
+        elif etype == "differential_item":
+            differential_items.append(ev)
+        else:
+            others.append(ev)
+
+    return emergency_flags + others + differential_items
+
+
+def deduplicate_citations(citations: list[dict]) -> list[dict]:
+    """Deduplicate citation dicts by ``(source_title, section)`` tuple.
+
+    The first occurrence of each unique pair is kept; subsequent duplicates
+    are discarded.  Source attribution is added based on ``source_title``
+    content (OMS, PNLP, MSF).
+    """
+    seen: set[tuple[str, str]] = set()
+    result: list[dict] = []
+
+    for cit in citations:
+        key = (cit.get("source_title", ""), cit.get("section", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        # Add source attribution
+        cit_copy = dict(cit)
+        cit_copy["source"] = _attribute_source(cit_copy.get("source_title", ""))
+        result.append(cit_copy)
+
+    return result
+
+
+def _attribute_source(source_title: str) -> str:
+    """Determine source attribution from the source_title string."""
+    title_lower = source_title.lower()
+    if "oms" in title_lower or "who" in title_lower:
+        return "OMS"
+    if "pnlp" in title_lower:
+        return "PNLP"
+    if "msf" in title_lower or "médecins sans frontières" in title_lower:
+        return "MSF"
+    return "Autre"
+
+
+def _generate_warnings(
+    diag_result: dict | None,
+    anti_result: dict | None,
+) -> list[str]:
+    """Build a list of clinical warning strings from diagnostic and
+    antibiotherapy results.
+
+    Warning sources:
+    1. Emergency flags from diagnostic result
+    2. High-resistance AMR notes on recommended drugs (>30%)
+    3. DDI warnings with CONTRAINDICATED or MAJOR severity
+    """
+    warnings: list[str] = []
+    diag_result = diag_result or {}
+    anti_result = anti_result or {}
+
+    # 1. Emergency flag warnings
+    for flag in diag_result.get("emergency_flags", []):
+        disease = flag.get("disease", "?") if isinstance(flag, dict) else getattr(flag, "disease", "?")
+        action = flag.get("action", "") if isinstance(flag, dict) else getattr(flag, "action", "")
+        warnings.append(f"⚠️ URGENCE: {disease} — {action}")
+
+    # 2. High-resistance AMR warnings from treatment tiers
+    for tier in ("first_line", "second_line", "alternatives"):
+        for drug in anti_result.get(tier, []):
+            amr_note = drug.get("amr_note", "") or ""
+            # Check if the note contains a resistance percentage > threshold
+            match = re.search(r"[Rr]ésistance\s+locale?\s+(\d+(?:[.,]\d+)?)\s*%", amr_note)
+            if match:
+                pct = float(match.group(1).replace(",", "."))
+                if pct > _AMR_RESISTANCE_THRESHOLD:
+                    drug_name = drug.get("drug_name", drug.get("generic_name", "?"))
+                    warnings.append(
+                        f"⚠️ Résistance élevée: {drug_name} — {amr_note}"
+                    )
+
+    # 3. DDI warnings (CONTRAINDICATED or MAJOR)
+    for tier in ("first_line", "second_line", "alternatives"):
+        for drug in anti_result.get(tier, []):
+            for ddi_warning in drug.get("ddi_warnings", []):
+                ddi_upper = ddi_warning.upper()
+                if "CONTRAINDICATED" in ddi_upper or "MAJOR" in ddi_upper:
+                    warnings.append(ddi_warning)
+
+    return warnings
+
+
+def _collect_references(
+    diag_citations: list[dict],
+    anti_citations: list[dict],
+) -> list[dict]:
+    """Merge and deduplicate citations from diagnostic and antibiotherapy
+    results, adding source attribution."""
+    all_citations = list(diag_citations or []) + list(anti_citations or [])
+    return deduplicate_citations(all_citations)
 

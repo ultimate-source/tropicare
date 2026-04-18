@@ -33,6 +33,7 @@ export function FeedbackPanel({ turnId }: { turnId: string }) {
         {(["correct", "partial", "incorrect"] as Verdict[]).map(v => (
           <button key={v}
             onClick={() => setVerdict(v)}
+            aria-label={v === "correct" ? "Marquer comme correcte" : v === "partial" ? "Marquer comme partielle" : "Marquer comme incorrecte"}
             className={cn(
               "flex-1 rounded-md border py-1.5 text-xs font-medium transition-colors",
               verdict === v
@@ -49,6 +50,7 @@ export function FeedbackPanel({ turnId }: { turnId: string }) {
         <textarea
           value={note}
           onChange={e => setNote(e.target.value)}
+          aria-label="Commentaire ou diagnostic réel"
           placeholder="Diagnostic réel / commentaire (optionnel)"
           rows={2}
           className="w-full resize-none rounded border px-2 py-1.5 text-xs bg-background text-foreground"
@@ -57,6 +59,7 @@ export function FeedbackPanel({ turnId }: { turnId: string }) {
       {verdict && (
         <button
           onClick={submit}
+          aria-label="Envoyer le retour clinicien"
           className="w-full rounded-md bg-blue-600 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
         >
           Envoyer le retour

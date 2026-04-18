@@ -11,22 +11,14 @@
 
 import { useState, type FormEvent } from "react"
 import { cn } from "@/lib/utils"
+import type { PatientContext, LabResult, Medication, VitalSigns } from "@/lib/types"
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Re-export for backward compatibility
+export type { PatientContext, LabResult, Medication, VitalSigns }
 
-export interface LabResult {
-  name:  string
-  value: string
-  unit:  string
-}
+// ── Local form-specific VitalSigns (allows empty string for unset fields) ────
 
-export interface Medication {
-  name:      string
-  dose:      string
-  frequency: string
-}
-
-export interface VitalSigns {
+interface FormVitalSigns {
   temp_c:       number | ""
   bp_systolic:  number | ""
   bp_diastolic: number | ""
@@ -34,22 +26,6 @@ export interface VitalSigns {
   rr:           number | ""
   spo2:         number | ""
   gcs:          number | ""
-}
-
-export interface PatientContext {
-  age_years:         number
-  sex:               "M" | "F"
-  weight_kg:         number | null
-  region:            string
-  chief_complaint:   string
-  symptoms:          { text: string }[]
-  vital_signs:       Partial<VitalSigns>
-  lab_results:       LabResult[]
-  current_medications: Medication[]
-  allergies:         string[]
-  pregnancy_status:  string
-  symptom_onset_days: number | null
-  travel_history:    string[]
 }
 
 interface Props {
@@ -79,6 +55,7 @@ function Section({
       <button
         type="button"
         onClick={onToggle}
+        aria-label={`${open ? "Réduire" : "Développer"} la section ${title}`}
         className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
       >
         <span className="text-sm font-medium text-gray-900">{title}</span>
@@ -89,10 +66,10 @@ function Section({
   )
 }
 
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+function Field({ label, required, htmlFor, children }: { label: string; required?: boolean; htmlFor?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1">
+      <label htmlFor={htmlFor} className="block text-xs font-medium text-gray-600 mb-1">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {children}
@@ -125,10 +102,12 @@ function LabEditor({
           <input value={r.unit}  onChange={e => edit(i, "unit",  e.target.value)}
             placeholder="Unité"   className={cn(inputCls, "w-20")} />
           <button type="button" onClick={() => remove(i)}
+            aria-label={`Supprimer le résultat ${r.name || "biologique"}`}
             className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
         </div>
       ))}
       <button type="button" onClick={add}
+        aria-label="Ajouter un résultat biologique"
         className="text-xs text-blue-600 hover:underline">+ Ajouter un résultat</button>
     </div>
   )
@@ -155,10 +134,12 @@ function MedEditor({
           <input value={r.frequency} onChange={e => edit(i, "frequency", e.target.value)}
             placeholder="Fréquence"   className={cn(inputCls, "w-28")} />
           <button type="button" onClick={() => remove(i)}
+            aria-label={`Supprimer le médicament ${r.name || ""}`}
             className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
         </div>
       ))}
       <button type="button" onClick={add}
+        aria-label="Ajouter un médicament"
         className="text-xs text-blue-600 hover:underline">+ Ajouter un médicament</button>
     </div>
   )
@@ -182,6 +163,7 @@ function TagEditor({
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add() } }}
           placeholder={placeholder} className={cn(inputCls, "flex-1")} />
         <button type="button" onClick={add}
+          aria-label="Ajouter un élément"
           className="rounded-lg border px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
           +
         </button>
@@ -192,6 +174,7 @@ function TagEditor({
             <span key={t} className="flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 px-2 py-0.5 text-xs text-blue-700">
               {t}
               <button type="button" onClick={() => onChange(tags.filter(x => x !== t))}
+                aria-label={`Supprimer ${t}`}
                 className="text-blue-400 hover:text-blue-600">×</button>
             </span>
           ))}
@@ -215,7 +198,7 @@ export function IntakeForm({ onComplete }: Props) {
 
   // Optional
   const [weight,      setWeight]      = useState<string>("")
-  const [vitals,      setVitals]      = useState<Partial<VitalSigns>>({})
+  const [vitals,      setVitals]      = useState<Partial<FormVitalSigns>>({})
   const [labs,        setLabs]        = useState<LabResult[]>([])
   const [meds,        setMeds]        = useState<Medication[]>([])
   const [allergies,   setAllergies]   = useState<string[]>([])
@@ -251,7 +234,9 @@ export function IntakeForm({ onComplete }: Props) {
       region,
       chief_complaint:   complaint.trim(),
       symptoms:          symptoms.map(s => ({ text: s })),
-      vital_signs:       vitals,
+      vital_signs:       Object.fromEntries(
+        Object.entries(vitals).map(([k, v]) => [k, v === "" ? null : v]),
+      ) as Partial<VitalSigns>,
       lab_results:       labs.filter(l => l.name.trim()),
       current_medications: meds.filter(m => m.name.trim()),
       allergies,
@@ -277,43 +262,43 @@ export function IntakeForm({ onComplete }: Props) {
         <p className="text-sm font-medium text-gray-900">Données patient</p>
 
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Âge (ans)" required>
-            <input type="number" min={0} max={120} value={age}
+          <Field label="Âge (ans)" required htmlFor="intake-age">
+            <input id="intake-age" type="number" min={0} max={120} value={age}
               onChange={e => setAge(e.target.value)}
               className={inputCls} placeholder="32" />
           </Field>
-          <Field label="Sexe" required>
-            <select value={sex} onChange={e => setSex(e.target.value as "M" | "F")}
+          <Field label="Sexe" required htmlFor="intake-sex">
+            <select id="intake-sex" value={sex} onChange={e => setSex(e.target.value as "M" | "F")}
               className={inputCls}>
               <option value="">—</option>
               <option value="M">Masculin</option>
               <option value="F">Féminin</option>
             </select>
           </Field>
-          <Field label="Poids (kg)">
-            <input type="number" min={0} value={weight}
+          <Field label="Poids (kg)" htmlFor="intake-weight">
+            <input id="intake-weight" type="number" min={0} value={weight}
               onChange={e => setWeight(e.target.value)}
               className={inputCls} placeholder="68" />
           </Field>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Région (Togo)" required>
-            <select value={region} onChange={e => setRegion(e.target.value)}
+          <Field label="Région (Togo)" required htmlFor="intake-region">
+            <select id="intake-region" value={region} onChange={e => setRegion(e.target.value)}
               className={inputCls}>
               <option value="">Sélectionner…</option>
               {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </Field>
-          <Field label="Début des symptômes (jours)">
-            <input type="number" min={0} value={onset}
+          <Field label="Début des symptômes (jours)" htmlFor="intake-onset">
+            <input id="intake-onset" type="number" min={0} value={onset}
               onChange={e => setOnset(e.target.value)}
               className={inputCls} placeholder="3" />
           </Field>
         </div>
 
-        <Field label="Motif de consultation" required>
-          <textarea value={complaint} onChange={e => setComplaint(e.target.value)}
+        <Field label="Motif de consultation" required htmlFor="intake-complaint">
+          <textarea id="intake-complaint" value={complaint} onChange={e => setComplaint(e.target.value)}
             rows={2} className={cn(inputCls, "resize-none")}
             placeholder="Fièvre élevée depuis 3 jours, frissons, céphalées…" />
         </Field>
@@ -323,8 +308,8 @@ export function IntakeForm({ onComplete }: Props) {
             placeholder="Ajouter symptôme (Entrée)" />
         </Field>
 
-        <Field label="Statut grossesse">
-          <select value={pregnancy} onChange={e => setPregnancy(e.target.value)}
+        <Field label="Statut grossesse" htmlFor="intake-pregnancy">
+          <select id="intake-pregnancy" value={pregnancy} onChange={e => setPregnancy(e.target.value)}
             className={inputCls}>
             {PREGNANCY_OPTIONS.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -345,7 +330,7 @@ export function IntakeForm({ onComplete }: Props) {
             ["FR (/min)",        "rr",           "18"  ],
             ["SpO2 (%)",         "spo2",         "98"  ],
             ["GCS",             "gcs",           "15"  ],
-          ] as [string, keyof VitalSigns, string][]).map(([label, key, ph]) => (
+          ] as [string, keyof FormVitalSigns, string][]).map(([label, key, ph]) => (
             <Field key={key} label={label}>
               <input type="number" step="0.1"
                 value={vitals[key] ?? ""}
@@ -380,6 +365,7 @@ export function IntakeForm({ onComplete }: Props) {
 
       {/* Submit */}
       <button type="submit"
+        aria-label="Démarrer la consultation"
         className="w-full rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white hover:bg-blue-700 active:scale-[0.99] transition-all shadow-sm">
         Démarrer la consultation →
       </button>

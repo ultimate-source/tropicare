@@ -106,6 +106,7 @@ export function TreatmentPlan({ plan, citations }: { plan: TreatmentPlanData; ci
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
+            aria-label={`Afficher les traitements ${t.label}`}
             className={cn(
               "flex-1 py-2 text-xs font-medium transition-colors",
               tab === t.key

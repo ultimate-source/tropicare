@@ -9,20 +9,29 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import asyncpg
+import redis.exceptions
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from .routers.auth      import router as auth_router
 from .routers.analytics import router as analytics_router
+from .middleware import SecurityHeadersMiddleware, CSRFMiddleware
 from ..orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from ..orchestrator.session import SessionStore
 from ..orchestrator.audit import AuditLogger
 from .auth import require_role, get_current_user
 from .config import Settings
+from ..observability.tracing import init_tracing
+from ..observability.metrics import (
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    metrics_app,
+)
+from ..observability.logging import configure_logging
 
 settings = Settings()
 limiter  = Limiter(key_func=get_remote_address)
@@ -31,6 +40,10 @@ limiter  = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Observability bootstrap ───────────────────────────────────────────────
+    configure_logging()
+    provider = init_tracing(service_name="tropicare-gateway")
+
     # Startup
     pg_pool = await asyncpg.create_pool(settings.DATABASE_URL, min_size=2, max_size=10)
     app.state.pg_pool      = pg_pool
@@ -45,11 +58,20 @@ async def lifespan(app: FastAPI):
     ))
     yield
     # Shutdown
+    provider.shutdown()
     await pg_pool.close()
 
 app = FastAPI(title="TropiCare API", version="1.0.0", lifespan=lifespan)
+
+# ── OpenTelemetry auto-instrumentation for FastAPI ────────────────────────────
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+FastAPIInstrumentor.instrument_app(app)
+
 app.include_router(auth_router)
 app.include_router(analytics_router)
+
+# ── Mount Prometheus /metrics endpoint ────────────────────────────────────────
+app.mount("/metrics", metrics_app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,6 +80,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security headers on every response (Requirements 22.1–22.4)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CSRF double-submit cookie for browser clients (Requirement 23.6)
+app.add_middleware(CSRFMiddleware)
+
+# ── Request metrics middleware ────────────────────────────────────────────────
+from ..observability.metrics import MetricsMiddleware
+app.add_middleware(MetricsMiddleware)
 
 # ── Dependency ────────────────────────────────────────────────────────────────
 
@@ -71,20 +103,20 @@ def get_store(request: Request) -> SessionStore:
 
 class CreateSessionRequest(BaseModel):
     patient_context: dict = {}
-    language:        str  = "fr"
+    language:        str  = Field(default="fr", max_length=5000)
 
 class CreateSessionResponse(BaseModel):
     session_id: str
 
 class TurnRequest(BaseModel):
-    query:  str
-    mode:   str = "auto"  # auto | diagnostic | antibiotherapy
+    query:  str = Field(max_length=5000)
+    mode:   str = Field(default="auto", max_length=5000)  # auto | diagnostic | antibiotherapy
 
 class FeedbackRequest(BaseModel):
-    turn_id:        str
-    verdict:        str   # correct | partial | incorrect
-    clinician_note: str | None = None
-    actual_diagnosis: str | None = None
+    turn_id:        str = Field(max_length=5000)
+    verdict:        str = Field(max_length=5000)  # correct | partial | incorrect
+    clinician_note: str | None = Field(default=None, max_length=5000)
+    actual_diagnosis: str | None = Field(default=None, max_length=5000)
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -97,22 +129,40 @@ class FeedbackRequest(BaseModel):
 async def create_session(
     request:   Request,
     body:      CreateSessionRequest,
-    user:      dict = Depends(get_current_user),
+    user:      dict = Depends(require_role("clinician")),
     store:     SessionStore = Depends(get_store),
 ):
+    user_id = user["sub"]
     session_id = str(uuid.uuid4())
-    await store.create(
-        session_id=session_id,
-        patient_context=body.patient_context,
-        language=body.language,
-    )
+    try:
+        # Enforce concurrent session limit (Requirement 34.2)
+        active_count = await store.count_user_sessions(user_id)
+        if active_count >= 5:
+            raise HTTPException(
+                status_code=429,
+                detail="Maximum 5 concurrent sessions",
+            )
+
+        await store.create(
+            session_id=session_id,
+            patient_context=body.patient_context,
+            language=body.language,
+        )
+        await store.register_session(user_id, session_id)
+    except HTTPException:
+        raise
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Session service temporarily unavailable",
+        ) from exc
     return CreateSessionResponse(session_id=session_id)
 
 
 @app.get("/api/v1/sessions/{session_id}")
 async def get_session(
     session_id: str,
-    user:       dict = Depends(get_current_user),
+    user:       dict = Depends(require_role("clinician")),
     store:      SessionStore = Depends(get_store),
 ):
     data = await store.get(session_id)
@@ -127,13 +177,20 @@ async def submit_turn(
     request:      Request,
     session_id:   str,
     body:         TurnRequest,
-    user:         dict = Depends(get_current_user),
+    user:         dict = Depends(require_role("clinician")),
     orchestrator: Orchestrator = Depends(get_orchestrator),
     store:        SessionStore = Depends(get_store),
 ):
-    state = await store.get(session_id)
+    try:
+        state = await store.get(session_id)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Session could not be loaded",
+        ) from exc
+
     if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session expired or not found")
 
     language = state.get("language", "fr")
     turn_id  = str(uuid.uuid4())
@@ -170,7 +227,7 @@ async def submit_turn(
 @app.post("/api/v1/feedback", status_code=201)
 async def submit_feedback(
     body:    FeedbackRequest,
-    user:    dict = Depends(get_current_user),
+    user:    dict = Depends(require_role("clinician")),
     request: Request = None,
 ):
     async with request.app.state.pg_pool.acquire() as conn:
@@ -189,12 +246,6 @@ async def submit_feedback(
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok", "service": "tropicare-gateway"}
-
-
-@app.get("/api/v1/metrics")
-async def metrics():
-    # Prometheus text format — in production use prometheus_client
-    return {"note": "mount prometheus_client.make_asgi_app() at /metrics"}
 
 
 # ── Admin routes (role: admin) ────────────────────────────────────────────────

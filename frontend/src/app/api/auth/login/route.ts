@@ -1,38 +1,77 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// app/api/auth/login/route.ts
-// Proxies login to FastAPI, sets httpOnly cookie on success.
+// app/api/auth/login/route.ts — handles both JSON and form POST
 // ─────────────────────────────────────────────────────────────────────────────
 import { NextRequest, NextResponse } from "next/server"
 
 const BACKEND = process.env.BACKEND_URL ?? "http://gateway:8000"
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
-  const upstream = await fetch(`${BACKEND}/api/v1/auth/login`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify(body),
-  })
+  let email: string
+  let password: string
+  const ct = req.headers.get("content-type") ?? ""
+  const isJson = ct.includes("application/json")
 
-  if (!upstream.ok) {
-    return NextResponse.json(
-      { error: "Identifiants invalides" },
-      { status: upstream.status }
-    )
+  console.log("[login] content-type:", ct, "host:", req.headers.get("host"))
+
+  if (isJson) {
+    const body = await req.json()
+    email = body.email
+    password = body.password
+  } else {
+    // Native form POST — works with both urlencoded and multipart
+    const form = await req.formData()
+    email = form.get("email") as string
+    password = form.get("password") as string
   }
 
-  const data = await upstream.json()
-  const res  = NextResponse.json({ user: data.user })
+  console.log("[login] email:", email, "isJson:", isJson)
 
-  // Set httpOnly cookie — JS cannot read it, mitigates XSS token theft
-  res.cookies.set({
-    name:     "tc_token",
-    value:    data.access_token,
+  const upstream = await fetch(`${BACKEND}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  })
+
+  console.log("[login] upstream status:", upstream.status)
+
+  const origin = `http://${req.headers.get("host") || "localhost:3000"}`
+
+  if (!isJson) {
+    if (!upstream.ok) {
+      console.log("[login] redirect to error")
+      return NextResponse.redirect(new URL("/login?error=1", origin))
+    }
+    const data = await upstream.json()
+    console.log("[login] success, redirecting to /chat at", origin)
+    const res = NextResponse.redirect(new URL("/chat", origin))
+    res.cookies.set("tc_token", data.access_token, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 8,
+    })
+    res.cookies.set("tc_user", JSON.stringify(data.user), {
+      httpOnly: false,
+      secure: false,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 8,
+    })
+    return res
+  }
+
+  if (!upstream.ok) {
+    return NextResponse.json({ error: "Identifiants invalides" }, { status: upstream.status })
+  }
+  const data = await upstream.json()
+  const res = NextResponse.json({ access_token: data.access_token, user: data.user })
+  res.cookies.set("tc_token", data.access_token, {
     httpOnly: true,
-    secure:   process.env.NODE_ENV === "production",
+    secure: false,
     sameSite: "lax",
-    path:     "/",
-    maxAge:   60 * 60 * 8,  // 8 hours
+    path: "/",
+    maxAge: 60 * 60 * 8,
   })
   return res
 }

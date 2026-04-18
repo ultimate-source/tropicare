@@ -1,20 +1,49 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// FILE STRUCTURE
-// app/(clinic)/chat/page.tsx           — chat page
-// components/chat/ChatStream.tsx       — main streaming UI
-// components/chat/DifferentialCard.tsx — ranked diagnosis card
-// components/chat/TreatmentPlan.tsx    — antibiotherapy plan
-// components/chat/EmergencyBanner.tsx  — emergency alert
-// components/chat/CitationDrawer.tsx   — source citations
-// components/chat/FeedbackPanel.tsx    — clinician feedback
-// hooks/useStream.ts                   — SSE consumer hook
-// lib/api.ts                           — typed API client
-// lib/types.ts                         — shared domain types
+// lib/types.ts — consolidated shared domain types
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// lib/types.ts
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Patient Context ───────────────────────────────────────────────────────────
+
+export interface LabResult {
+  name:  string
+  value: string
+  unit:  string
+}
+
+export interface Medication {
+  name:      string
+  dose:      string
+  frequency: string
+}
+
+export interface VitalSigns {
+  temp_c:       number | null
+  bp_systolic:  number | null
+  bp_diastolic: number | null
+  hr:           number | null
+  rr:           number | null
+  spo2:         number | null
+  gcs:          number | null
+}
+
+export interface PatientContext {
+  age_years:          number
+  sex:                "M" | "F"
+  weight_kg:          number | null
+  region:             string
+  chief_complaint:    string
+  symptoms:           { text: string; normalized?: string }[]
+  vital_signs?:       Partial<VitalSigns>
+  lab_results:        LabResult[]
+  current_medications: Medication[]
+  allergies:          string[]
+  pregnancy_status:   string
+  symptom_onset_days: number | null
+  travel_history:     string[]
+}
+
+// ── Diagnostic ────────────────────────────────────────────────────────────────
+
 export type Severity = "contraindicated" | "major" | "moderate" | "minor"
 export type Verdict  = "PASS" | "WARN" | "BLOCK"
 
@@ -37,11 +66,22 @@ export interface DiagnosisItem {
   citations: number[]
 }
 
+export interface ConfirmatoryTest {
+  name: string
+  priority: "urgent" | "standard" | "optional"
+  availability_togo: "disponible" | "limité" | "indisponible"
+  interpretation: string
+}
+
+// ── Urgences ──────────────────────────────────────────────────────────────────
+
 export interface EmergencyFlag {
   disease: string
   level: "critical" | "urgent"
   action: string
 }
+
+// ── Treatment ─────────────────────────────────────────────────────────────────
 
 export interface DrugRegimen {
   drug_name: string
@@ -71,6 +111,13 @@ export interface TreatmentPlanData {
   disclaimer: string
 }
 
+export interface Contraindicated {
+  drug: string
+  reason: string
+}
+
+// ── Citations ─────────────────────────────────────────────────────────────────
+
 export interface Citation {
   ref_id: number
   source_title: string
@@ -81,7 +128,8 @@ export interface Citation {
   chunk_snippet: string
 }
 
-// ── SSE event discriminated union ─────────────────────────────
+// ── SSE event discriminated union ─────────────────────────────────────────────
+
 export type SSEEvent =
   | { type: "thinking";          content: string }
   | { type: "emergency_flag";    flag: EmergencyFlag }
@@ -91,25 +139,3 @@ export type SSEEvent =
   | { type: "validation";        verdict: Verdict; annotations: string[] }
   | { type: "error";             message: string }
   | { type: "done";              turn_id: string }
-
-// ── Diagnostic différentiel ──
-
-export interface ConfirmatoryTest {
-  name: string;
-  priority: "urgent" | "standard" | "optional";
-  availability_togo: "disponible" | "limité" | "indisponible";
-  interpretation: string;
-}
-
-export interface Contraindicated {
-  drug: string;
-  reason: string;
-}
-
-// ── Urgences ──
-export interface EmergencyFlag {
-  disease: string;
-  level: "critical" | "urgent";
-  action: string;
-}
-

@@ -1,9 +1,10 @@
 #  ─────────────────────────────────────────────────────────────────────────────
 # tropicare_gateway/routers/auth.py
 # ─────────────────────────────────────────────────────────────────────────────
-from __future__ import annotations
 
+import math
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
@@ -11,9 +12,21 @@ import asyncpg
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import jwt
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+limiter = Limiter(key_func=get_remote_address)
+
+# ── Account lockout constants ─────────────────────────────────────────────────
+
+_FAIL_KEY = "auth:fail:{email}"    # tracks failure count, 30min TTL
+_LOCK_KEY = "auth:lock:{email}"    # lockout flag, 15min TTL
+
+MAX_FAILED_ATTEMPTS = 5
+FAIL_WINDOW_SECONDS = 1800   # 30 minutes
+LOCK_DURATION_SECONDS = 900  # 15 minutes
 
 # ── Key loading ───────────────────────────────────────────────────────────────
 
@@ -67,7 +80,7 @@ def _verify(token: str, expected_type: str = "access") -> dict:
 
 class LoginRequest(BaseModel):
     email:    EmailStr
-    password: str
+    password: str = Field(max_length=5000)
 
 class LoginResponse(BaseModel):
     access_token:  str
@@ -76,16 +89,21 @@ class LoginResponse(BaseModel):
     user: dict
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(max_length=5000)
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password:     str
+    current_password: str = Field(max_length=5000)
+    new_password:     str = Field(max_length=5000)
 
 class CreateUserRequest(BaseModel):
     email:    EmailStr
-    password: str
+    password: str = Field(max_length=5000)
     roles:    list[str] = ["clinician"]
+
+class RegisterRequest(BaseModel):
+    email:    EmailStr
+    password: str = Field(max_length=5000)
+    role:     str = Field(default="clinician", max_length=5000)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -115,26 +133,120 @@ def _check(password: str, hashed: str) -> bool:
 def _safe_user(u: dict) -> dict:
     return {"id": str(u["id"]), "email": u["email"], "roles": u["roles"]}
 
+# ── Redis + lockout helpers ───────────────────────────────────────────────────
+
+def _redis(request: Request):
+    """Get the Redis client from the session store."""
+    return request.app.state.session_store._redis
+
+
+async def _check_lockout(request: Request, email: str) -> None:
+    """Raise HTTP 423 if the account is currently locked."""
+    r = _redis(request)
+    lock_key = _LOCK_KEY.format(email=email)
+    ttl = await r.ttl(lock_key)
+    if ttl > 0:
+        minutes_left = math.ceil(ttl / 60)
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Account locked — retry in {minutes_left} minutes",
+        )
+
+
+async def _record_failed_attempt(request: Request, email: str) -> None:
+    """Increment failure counter; lock account when threshold is reached."""
+    r = _redis(request)
+    fail_key = _FAIL_KEY.format(email=email)
+
+    count = await r.incr(fail_key)
+    if count == 1:
+        # First failure — set the 30-minute sliding window
+        await r.expire(fail_key, FAIL_WINDOW_SECONDS)
+
+    if count >= MAX_FAILED_ATTEMPTS:
+        lock_key = _LOCK_KEY.format(email=email)
+        await r.set(lock_key, "1", ex=LOCK_DURATION_SECONDS)
+        # Reset the failure counter so it doesn't keep growing
+        await r.delete(fail_key)
+
+
+async def _clear_failed_attempts(request: Request, email: str) -> None:
+    """Clear failure counter on successful login."""
+    r = _redis(request)
+    fail_key = _FAIL_KEY.format(email=email)
+    await r.delete(fail_key)
+
+def _validate_password(password: str) -> None:
+    """Validate password strength. Raises HTTPException(422) on failure."""
+    if len(password) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be ≥10 chars with upper, lower, digit",
+        )
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be ≥10 chars with upper, lower, digit",
+        )
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be ≥10 chars with upper, lower, digit",
+        )
+    if not re.search(r"[0-9]", password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be ≥10 chars with upper, lower, digit",
+        )
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@router.post("/register", status_code=201)
+@limiter.limit("10/minute")
+async def register(body: RegisterRequest, request: Request):
+    """Public endpoint: register a new user account."""
+    _validate_password(body.password)
+    pool = _pool(request)
+    existing = await _fetch_user(pool, body.email)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    hashed = _hash(body.password)
+    row = await pool.fetchrow(
+        "INSERT INTO users (email, hashed_pw, roles) VALUES ($1,$2,$3) RETURNING id, email",
+        body.email, hashed, [body.role],
+    )
+    return {"user_id": str(row["id"]), "email": row["email"]}
+
+
 @router.post("/login", response_model=LoginResponse)
+@limiter.limit("10/minute")
 async def login(body: LoginRequest, request: Request):
     pool = _pool(request)
+
+    # 1. Check if account is locked
+    await _check_lockout(request, body.email)
+
     user = await _fetch_user(pool, body.email)
 
     if not user or not user["active"]:
         # Constant-time path even when user not found
         bcrypt.checkpw(b"dummy", bcrypt.hashpw(b"dummy", bcrypt.gensalt()))
+        await _record_failed_attempt(request, body.email)
         raise HTTPException(status_code=401, detail="Identifiants invalides")
 
     if not _check(body.password, user["hashed_pw"]):
+        await _record_failed_attempt(request, body.email)
         raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    # 3. Successful login — clear failure counter
+    await _clear_failed_attempts(request, body.email)
 
     tokens = _make_tokens(user)
     return LoginResponse(**tokens, user=_safe_user(user))
 
 
 @router.post("/refresh")
+@limiter.limit("10/minute")
 async def refresh(body: RefreshRequest, request: Request):
     payload = _verify(body.refresh_token, expected_type="refresh")
     pool    = _pool(request)
@@ -169,8 +281,7 @@ async def change_password(
     )
     if not row or not _check(body.current_password, row["hashed_pw"]):
         raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
-    if len(body.new_password) < 10:
-        raise HTTPException(status_code=422, detail="Mot de passe trop court (min 10 caractères)")
+    _validate_password(body.new_password)
     await pool.execute(
         "UPDATE users SET hashed_pw = $1 WHERE id = $2", _hash(body.new_password), row["id"]
     )
@@ -180,8 +291,7 @@ async def change_password(
 async def create_user(body: CreateUserRequest, request: Request):
     """Admin-only: create a new user account."""
     _require_admin(_verify(_bearer_token(request)))
-    if len(body.password) < 10:
-        raise HTTPException(status_code=422, detail="Mot de passe trop court (min 10 caractères)")
+    _validate_password(body.password)
     pool     = _pool(request)
     existing = await _fetch_user(pool, body.email)
     if existing:

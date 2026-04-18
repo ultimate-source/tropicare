@@ -114,6 +114,7 @@ export function ChatStream({ sessionId }: Props) {
         {state.citations.length > 0 && (
           <button
             onClick={() => setCitOpen(true)}
+            aria-label={`Afficher ${state.citations.length} source${state.citations.length > 1 ? "s" : ""}`}
             className="shrink-0 text-xs text-blue-600 underline hover:text-blue-800 mb-2"
           >
             {state.citations.length} source{state.citations.length > 1 ? "s" : ""}
@@ -127,6 +128,7 @@ export function ChatStream({ sessionId }: Props) {
             onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e as any) }
             }}
+            aria-label="Saisir le tableau clinique ou une question"
             placeholder="Décrivez le tableau clinique ou posez une question…"
             rows={2}
             className={cn(
@@ -139,6 +141,7 @@ export function ChatStream({ sessionId }: Props) {
             <button
               type="button"
               onClick={abort}
+              aria-label="Arrêter la génération"
               className="shrink-0 rounded-lg bg-red-100 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-200"
             >
               Arrêter
@@ -147,6 +150,7 @@ export function ChatStream({ sessionId }: Props) {
             <button
               type="submit"
               disabled={!input.trim()}
+              aria-label="Envoyer la question"
               className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
             >
               Envoyer

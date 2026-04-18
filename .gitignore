@@ -21,7 +21,8 @@ coverage.xml
 
 # ── Environment / secrets ────────────────────────────────────
 .env
-.env.local
+.env.*
+!.env.example
 keys/
 
 # ── IDE ──────────────────────────────────────────────────────

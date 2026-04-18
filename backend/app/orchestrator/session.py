@@ -47,3 +47,36 @@ class SessionStore:
 
     async def delete(self, session_id: str) -> None:
         await self._redis.delete(self._key(session_id))
+
+    # ── User session tracking (concurrent session limits) ─────────────────────
+
+    def _user_sessions_key(self, user_id: str) -> str:
+        return f"user_sessions:{user_id}"
+
+    async def register_session(self, user_id: str, session_id: str) -> None:
+        """Register a session for a user in their session tracking set."""
+        await self._redis.sadd(self._user_sessions_key(user_id), session_id)
+
+    async def unregister_session(self, user_id: str, session_id: str) -> None:
+        """Remove a session from a user's tracking set."""
+        await self._redis.srem(self._user_sessions_key(user_id), session_id)
+
+    async def count_user_sessions(self, user_id: str) -> int:
+        """Count active sessions for a user, cleaning up expired ones."""
+        key = self._user_sessions_key(user_id)
+        session_ids = await self._redis.smembers(key)
+        if not session_ids:
+            return 0
+
+        # Filter out expired sessions (those no longer in Redis)
+        expired = []
+        for sid in session_ids:
+            exists = await self._redis.exists(self._key(sid))
+            if not exists:
+                expired.append(sid)
+
+        # Clean up expired entries from the set
+        if expired:
+            await self._redis.srem(key, *expired)
+
+        return len(session_ids) - len(expired)

@@ -31,6 +31,7 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
       {/* Header row */}
       <button
         onClick={() => setExpanded(x => !x)}
+        aria-label={`${expanded ? "Réduire" : "Développer"} le diagnostic : ${item.disease_name}`}
         className="flex w-full items-center gap-3 p-3 text-left"
       >
         {/* Rank badge */}

@@ -7,13 +7,14 @@ const BACKEND = process.env.BACKEND_URL ?? "http://gateway:8000"
 
 export async function POST(
   req:     NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const token = req.cookies.get("tc_token")?.value
   const body  = await req.json()
+  const { id } = await params
 
   const upstream = await fetch(
-    `${BACKEND}/api/v1/sessions/${params.id}/turns`,
+    `${BACKEND}/api/v1/sessions/${id}/turns`,
     {
       method:  "POST",
       headers: {

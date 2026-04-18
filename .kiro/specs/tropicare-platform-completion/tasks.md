@@ -86,31 +86,31 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Add `mongo-init` service to run `rs.initiate()` on first startup
     - _Requirements: 35.5, 35.6_
 
-- [ ] 6. Frontend type and file consolidation
-  - [ ] 6.1 Consolidate TypeScript types and remove legacy files
+- [x] 6. Frontend type and file consolidation
+  - [x] 6.1 Consolidate TypeScript types and remove legacy files
     - Merge `frontend/src/types/index.ts` and `frontend/src/lib/types.ts` into single `frontend/src/lib/types.ts` with all domain types from design
     - Remove duplicate `frontend/src/globals.css`, retain only `frontend/src/app/globals.css`
     - Remove legacy `frontend/src/components/ResultsPanel.tsx` and `frontend/src/components/SymptomForm.tsx`
     - Update all frontend imports to reference consolidated type file
     - _Requirements: 4.1, 4.2, 4.3, 4.4_
 
-  - [ ] 6.2 Fix chat/page.tsx type mismatch
+  - [x] 6.2 Fix chat/page.tsx type mismatch
     - Change `handleIntakeComplete` parameter type from `Record<string, unknown>` to `PatientContext`
     - Import `PatientContext` from `@/lib/types`
     - _Requirements: 27.3_
 
-- [ ] 7. Checkpoint — Ensure restructuring and migration compile cleanly
+- [x] 7. Checkpoint — Ensure restructuring and migration compile cleanly
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 8. Authentication and authorization
-  - [ ] 8.1 Implement user registration endpoint
+- [x] 8. Authentication and authorization
+  - [x] 8.1 Implement user registration endpoint
     - Create `POST /api/v1/auth/register` in `backend/app/gateway/routers/auth.py`
     - Hash passwords with bcrypt (cost factor ≥ 12)
     - Validate password: ≥10 chars, 1 uppercase, 1 lowercase, 1 digit
     - Return HTTP 409 for duplicate email, HTTP 422 for weak password
     - _Requirements: 13.1, 13.2, 13.3_
 
-  - [ ] 8.2 Implement login with JWT RS256 and refresh tokens
+  - [x] 8.2 Implement login with JWT RS256 and refresh tokens
     - Create `POST /api/v1/auth/login` returning access token (8h expiry) and refresh token (30d expiry)
     - Create `POST /api/v1/auth/refresh` for token rotation
     - Sign tokens with RS256 using private key
@@ -118,26 +118,26 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Implement account lockout after 5 failed attempts within 30 minutes (15-minute lock)
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
 
-  - [ ] 8.3 Implement RBAC enforcement
+  - [x] 8.3 Implement RBAC enforcement
     - Enforce "admin" role on document management and analytics endpoints
     - Enforce "clinician" role on session creation, turn submission, and feedback endpoints
     - Return HTTP 403 when role is absent
     - _Requirements: 15.1, 15.2, 15.3, 15.4_
 
-  - [ ] 8.4 Write property test for password validation (Property 8)
+  - [x] 8.4 Write property test for password validation (Property 8)
     - **Property 8: Password validation rejects weak passwords**
     - Use Hypothesis to generate strings missing required character classes
     - Verify registration rejects each with validation error
     - Place in `tests/property/test_password_validation.py`
     - **Validates: Requirement 13.3**
 
-- [ ] 9. Security hardening
-  - [ ] 9.1 Implement security headers middleware
+- [x] 9. Security hardening
+  - [x] 9.1 Implement security headers middleware
     - Create `backend/app/gateway/middleware.py` with Starlette middleware
     - Set `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=31536000`, `Content-Security-Policy: default-src 'self'` on every response
     - _Requirements: 22.1, 22.2, 22.3, 22.4_
 
-  - [ ] 9.2 Implement input validation and CSRF protection
+  - [x] 9.2 Implement input validation and CSRF protection
     - Add `max_length=5000` constraint on all request body string fields via Pydantic models
     - Add region enum validation: `Maritime`, `Plateaux`, `Centrale`, `Kara`, `Savanes`
     - Add email regex validation on registration
@@ -145,29 +145,29 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Configure rate limiting: 30/min sessions, 60/min turns, 10/min auth
     - _Requirements: 23.1, 23.2, 23.3, 23.5, 23.6_
 
-  - [ ] 9.3 Implement PII hashing in audit logger
+  - [x] 9.3 Implement PII hashing in audit logger
     - Enhance `AuditLogger.log()` to SHA-256 hash `age_years`, `weight_kg`, `chief_complaint`, symptom `text` entries, and `allergies` before writing to `audit_log`
     - _Requirements: 23.4_
 
-  - [ ] 9.4 Write property test for security headers (Property 10)
+  - [x] 9.4 Write property test for security headers (Property 10)
     - **Property 10: Security headers on every response**
     - Use Hypothesis to generate random valid HTTP requests (various methods, paths)
     - Verify all responses contain required security headers
     - Place in `tests/property/test_security_headers.py`
     - **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
 
-  - [ ] 9.5 Write property test for PII hashing (Property 11)
+  - [x] 9.5 Write property test for PII hashing (Property 11)
     - **Property 11: PII hashing in audit logs**
     - Use Hypothesis to generate random audit payloads with PII fields
     - Verify SHA-256 hashing is applied before persistence
     - Place in `tests/property/test_audit_pii_hashing.py`
     - **Validates: Requirement 23.2**
 
-- [ ] 10. Checkpoint — Auth and security verified
+- [x] 10. Checkpoint — Auth and security verified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 11. Agent intelligence — Diagnostic Agent
-  - [ ] 11.1 Implement full DiagnosticAgent with ReAct loop and MCP tool calls
+- [x] 11. Agent intelligence — Diagnostic Agent
+  - [x] 11.1 Implement full DiagnosticAgent with ReAct loop and MCP tool calls
     - Ensure `DiagnosticAgent._execute` invokes `hybrid_retrieve` with ≥2 query expansions (symptom-based and epidemiological)
     - Invoke `epid_calendar` MCP tool with patient region and current month
     - Implement ReAct loop with up to 4 iterations, detecting `RETRIEVE:` signals
@@ -176,21 +176,21 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Retry LLM call once on invalid JSON output before returning structured error
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 7.1, 7.2, 7.3, 7.4, 8.1_
 
-  - [ ] 11.2 Write property test for diagnostic output structural invariants (Property 2)
+  - [x] 11.2 Write property test for diagnostic output structural invariants (Property 2)
     - **Property 2: Diagnostic output structural invariants**
     - Generate random `DiagnosticDifferential` objects, verify field constraints (non-empty disease_name, icd11_code, confidence in [0.0, 1.0], ≥1 supporting_evidence, valid availability_togo values)
     - Place in `tests/property/test_diagnostic_invariants.py`
     - **Validates: Requirements 7.1, 7.2, 7.3, 17.6**
 
-  - [ ] 11.3 Write property test for diagnostic parser correctness (Property 9)
+  - [x] 11.3 Write property test for diagnostic parser correctness (Property 9)
     - **Property 9: Diagnostic output parser correctness**
     - Generate random strings (valid JSON, invalid JSON, partial JSON)
     - Verify parser produces valid `DiagnosticDifferential` or raises `ValueError` — never silently produces malformed output
     - Place in `tests/property/test_diagnostic_invariants.py`
     - **Validates: Requirement 17.5**
 
-- [ ] 12. Agent intelligence — Treatment and Resistance Agents
-  - [ ] 12.1 Implement full AntibiotherapyAgent with MCP tool integration
+- [x] 12. Agent intelligence — Treatment and Resistance Agents
+  - [x] 12.1 Implement full AntibiotherapyAgent with MCP tool integration
     - Invoke `hybrid_retrieve` with ≥3 query expansions (PNLP protocol, antibiotherapy guidelines, WHO posology)
     - Invoke `formulary_lookup` for CAME availability, `amr_lookup` to deprioritize drugs with >30% resistance
     - Calculate mg/kg dosage for pediatric patients, include route/frequency/duration
@@ -199,36 +199,36 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Append mandatory regulatory disclaimer to every treatment plan
     - _Requirements: 9.1, 9.2, 9.3, 10.1, 10.2, 10.3, 10.4_
 
-  - [ ] 12.2 Implement Resistance Agent logic within AntibiotherapyAgent
+  - [x] 12.2 Implement Resistance Agent logic within AntibiotherapyAgent
     - Invoke `amr_lookup` for resistance profiles matching inferred pathogens and patient region
     - Fall back to "West Africa" region when no Togo-specific data exists, indicating fallback source
     - Include resistance percentage, confidence level, data source, and year for each pair
     - Return structured response indicating data unavailability when no AMR data exists, recommending empirical PNLP protocol
     - _Requirements: 11.1, 11.2, 11.3, 11.4_
 
-  - [ ] 12.3 Write property test for treatment disclaimer invariant (Property 4)
+  - [x] 12.3 Write property test for treatment disclaimer invariant (Property 4)
     - **Property 4: Treatment disclaimer invariant**
     - Generate random `TreatmentPlan` objects via `AntibiotherapyAgent._parse_output`
     - Verify disclaimer field is present and starts with "⚠️ AIDE À LA DÉCISION UNIQUEMENT"
     - Place in `tests/property/test_treatment_invariants.py`
     - **Validates: Requirements 10.4, 17.7**
 
-  - [ ] 12.4 Write property test for high-resistance drug exclusion (Property 6)
+  - [x] 12.4 Write property test for high-resistance drug exclusion (Property 6)
     - **Property 6: High-resistance drug exclusion from first-line**
     - Generate random treatment plans with AMR data indicating >30% resistance
     - Verify those drugs do not appear in `first_line`
     - Place in `tests/property/test_treatment_invariants.py`
     - **Validates: Requirement 9.3**
 
-  - [ ] 12.5 Write property test for pregnancy safety filtering (Property 7)
+  - [x] 12.5 Write property test for pregnancy safety filtering (Property 7)
     - **Property 7: Pregnancy safety filtering**
     - Generate random treatment plans for pregnant patients
     - Verify all drugs in first_line/second_line/alternatives have pregnancy_class A, B, or C
     - Place in `tests/property/test_treatment_invariants.py`
     - **Validates: Requirement 10.2**
 
-- [ ] 13. Orchestrator clinical alerts, references, and validation
-  - [ ] 13.1 Implement Orchestrator warning generation and reference collection
+- [x] 13. Orchestrator clinical alerts, references, and validation
+  - [x] 13.1 Implement Orchestrator warning generation and reference collection
     - Generate clinical warning messages from emergency flags in diagnostic result
     - Add high-resistance warnings when AMR data indicates >30% resistance for recommended drugs
     - Add DDI warnings for "contraindicated" or "major" severity interactions with drug names and management
@@ -236,147 +236,147 @@ This plan implements the TropiCare platform completion across 35 requirements in
     - Wire `ValidationAgent.run_validation` for both diagnostic and antibiotherapy outputs
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 8.2_
 
-  - [ ] 13.2 Write property test for emergency flag ordering (Property 3)
+  - [x] 13.2 Write property test for emergency flag ordering (Property 3)
     - **Property 3: Emergency flag ordering invariant**
     - Generate random lists of SSE events including `emergency_flag` and `differential_item`
     - Pass through Orchestrator ordering logic, verify all emergency_flag events precede all differential_item events
     - Place in `tests/property/test_event_ordering.py`
     - **Validates: Requirements 7.4, 17.8**
 
-  - [ ] 13.3 Write property test for citation deduplication (Property 5)
+  - [x] 13.3 Write property test for citation deduplication (Property 5)
     - **Property 5: Citation deduplication invariant**
     - Generate random citation lists with duplicates, pass through deduplication logic
     - Verify uniqueness by (source_title, section) tuple
     - Place in `tests/property/test_treatment_invariants.py`
     - **Validates: Requirements 12.4, 17.9**
 
-- [ ] 14. Checkpoint — Agent pipeline end-to-end verified
+- [x] 14. Checkpoint — Agent pipeline end-to-end verified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 15. Observability stack
-  - [ ] 15.1 Implement OpenTelemetry tracing
+- [x] 15. Observability stack
+  - [x] 15.1 Implement OpenTelemetry tracing
     - Configure `opentelemetry-sdk` + `opentelemetry-exporter-otlp` to export traces to Jaeger (:4317)
     - Create child spans for each agent execution with attributes: agent name, latency_ms, input_tokens, output_tokens, verdict
     - Create spans for MCP tool invocations with tool name and result count
     - _Requirements: 24.1, 24.2, 24.3_
 
-  - [ ] 15.2 Implement Prometheus metrics and structured logging
+  - [x] 15.2 Implement Prometheus metrics and structured logging
     - Mount `prometheus_client.make_asgi_app()` at `/metrics`
     - Add request count counter by endpoint and status code
     - Add agent latency histograms (p50, p95, p99) and error rate by agent
     - Configure `structlog` JSON formatter with fields: timestamp, level, request_id, session_id, agent_name, latency_ms
     - _Requirements: 25.1, 25.2, 25.3_
 
-  - [ ] 15.3 Create Grafana dashboard configuration
+  - [x] 15.3 Create Grafana dashboard configuration
     - Create `docker/grafana/provisioning/dashboards/tropicare.json` with panels for request rate, agent latency distribution, error rate by agent, active session count
     - _Requirements: 25.4_
 
-- [ ] 16. Resilience and performance
-  - [ ] 16.1 Implement circuit breakers for LLM and MCP calls
+- [x] 16. Resilience and performance
+  - [x] 16.1 Implement circuit breakers for LLM and MCP calls
     - Create `backend/app/gateway/circuit_breaker.py` with `CircuitBreaker` class (CLOSED → OPEN → HALF_OPEN → CLOSED)
     - Configure: failure_threshold=5, window_seconds=60, recovery_seconds=30
     - Wrap `BaseAgent._call_claude` with `llm_breaker`
     - Wrap `MCPClient.call` with `mcp_breaker`
     - _Requirements: 29.1, 29.2, 29.3_
 
-  - [ ] 16.2 Implement graceful degradation for agent pipeline failures
+  - [x] 16.2 Implement graceful degradation for agent pipeline failures
     - On MCP tool failure: continue with available data, add warning annotation
     - On invalid LLM JSON: extract valid fields, discard malformed, emit validation warning
     - On all retries exhausted: return structured error event in session language
     - _Requirements: 28.1, 28.2, 28.3_
 
-  - [ ] 16.3 Implement infrastructure fallbacks
+  - [x] 16.3 Implement infrastructure fallbacks
     - MongoDB fallback: fall back to BM25-only retrieval when vector search is unreachable, log error with connection details
     - Redis unavailability: return HTTP 503 for session create/turn submit
     - Empty KB: add warning annotation for no-evidence scenarios
     - _Requirements: 31.1, 31.2, 32.1, 32.2, 33.1, 33.2_
 
-  - [ ] 16.4 Implement performance caching and connection pooling
+  - [x] 16.4 Implement performance caching and connection pooling
     - Cache `hybrid_retrieve` results in Redis with 1-hour TTL keyed by query hash
     - Ensure session store uses 24h TTL and limits conversation history to 20 turns
     - Configure database connection pool: min_size=2, max_size=10
     - Cache embedding vectors in Redis with 24h TTL keyed by content hash
     - _Requirements: 30.1, 30.2, 30.3, 30.4_
 
-  - [ ] 16.5 Implement session expiry and concurrent session limits
+  - [x] 16.5 Implement session expiry and concurrent session limits
     - Return HTTP 404 for expired/missing session IDs
     - Limit each user to 5 concurrent active sessions, return HTTP 429 when exceeded
     - _Requirements: 34.1, 34.2_
 
-  - [ ] 16.6 Write property test for session history bound (Property 12)
+  - [x] 16.6 Write property test for session history bound (Property 12)
     - **Property 12: Session conversation history bounded**
     - Use Hypothesis to generate session histories with >20 turns
     - Verify `append_turn` truncates to at most 20 entries
     - Place in `tests/property/test_session_history_bound.py`
     - **Validates: Requirement 30.2**
 
-- [ ] 17. Checkpoint — Resilience and performance verified
+- [x] 17. Checkpoint — Resilience and performance verified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 18. Frontend improvements
-  - [ ] 18.1 Implement ErrorBoundary component
+- [x] 18. Frontend improvements
+  - [x] 18.1 Implement ErrorBoundary component
     - Create class component wrapping all route-level pages
     - Catch rendering errors, display localized fallback (French/English) with retry button
     - Log error details to console
     - _Requirements: 26.1, 26.2_
 
-  - [ ] 18.2 Implement loading states and accessibility
+  - [x] 18.2 Implement loading states and accessibility
     - Add loading indicators (skeleton/spinner) for all data-dependent components during API requests and streaming
     - Add `aria-label` attributes on all interactive elements (buttons, inputs, selects, links)
     - Use semantic HTML landmarks: `<main>`, `<nav>`, `<header>`
     - _Requirements: 27.1, 27.2_
 
-- [ ] 19. Knowledge base seeding
-  - [ ] 19.1 Seed CAME formulary data
+- [x] 19. Knowledge base seeding
+  - [x] 19.1 Seed CAME formulary data
     - Create Alembic migration seeding ≥80 entries in `came_formulary` with generic name, ATC code, availability status, dosage forms
     - Cover antimalarials, antibiotics, antifungals, antiparasitics, and supportive care medications
     - _Requirements: 20.1, 20.2_
 
-  - [ ] 19.2 Seed AMR, DDI, and drug safety data
+  - [x] 19.2 Seed AMR, DDI, and drug safety data
     - Seed ≥50 entries in `amr_data` covering key drug-pathogen-region combinations for Togo and West Africa
     - Seed ≥30 entries in `ddi_interactions` covering clinically significant tropical disease medication interactions
     - Seed ≥40 entries in `drug_safety` covering pregnancy categories, lactation safety, and trimester-specific notes
     - _Requirements: 21.1, 21.2, 21.3_
 
-- [ ] 20. Backend unit and integration tests
-  - [ ] 20.1 Write unit tests for agents
+- [x] 20. Backend unit and integration tests
+  - [x] 20.1 Write unit tests for agents
     - Test `DiagnosticAgent` with mocked MCP tools: verify differential list with valid ICD-11 codes and confidence scores
     - Test `AntibiotherapyAgent` with mocked MCP tools: verify drug recommendations with dosage, route, CAME availability
     - Test `AntibiotherapyAgent` resistance logic with mocked AMR data: verify resistance profiles with percentage and confidence level
     - _Requirements: 16.1, 16.2, 16.3_
 
-  - [ ] 20.2 Write integration tests for Gateway endpoints
+  - [x] 20.2 Write integration tests for Gateway endpoints
     - Test session creation `POST /api/v1/sessions` → HTTP 201 with valid session_id
     - Test turn submission `POST /api/v1/sessions/{id}/turns` → NDJSON streaming with expected event types
     - Test feedback submission `POST /api/v1/feedback` → HTTP 201
     - Test admin document endpoints → HTTP 403 for non-admin, HTTP 200 for admin
     - _Requirements: 16.4, 16.5, 16.6, 16.7_
 
-- [ ] 21. Frontend component tests
-  - [ ] 21.1 Write component tests for IntakeForm, ChatStream, and EmergencyBanner
+- [x] 21. Frontend component tests
+  - [x] 21.1 Write component tests for IntakeForm, ChatStream, and EmergencyBanner
     - Test `IntakeForm` mandatory field validation: reject submissions missing age, sex, region, or chief complaint
     - Test `ChatStream` streaming event rendering: differential cards, treatment plans, emergency banners
     - Test `EmergencyBanner` emergency flag display with urgent visual styling
     - _Requirements: 17.1, 17.2, 17.3_
 
-- [ ] 22. Evaluation framework verification
-  - [ ] 22.1 Verify evaluation harness functionality
+- [x] 22. Evaluation framework verification
+  - [x] 22.1 Verify evaluation harness functionality
     - Ensure `EvalHarness` executes benchmark cases by creating sessions, submitting turns, collecting streamed responses
     - Verify computation of top-1, top-3, top-5 accuracy, MRR, emergency recall, citation rate, guideline adherence, CAME coverage, disclaimer rate
     - Verify `BenchmarkReport` generation with per-category and per-difficulty breakdowns
     - _Requirements: 18.1, 18.2, 18.3, 18.4_
 
-- [ ] 23. Documentation
-  - [ ] 23.1 Create README.md and API documentation
+- [x] 23. Documentation
+  - [x] 23.1 Create README.md and API documentation
     - Write `README.md` with project overview, architecture description, prerequisites, local development setup, environment variable reference
     - Write API documentation covering all Gateway endpoints with request/response schemas, auth requirements, example curl commands
     - _Requirements: 19.1, 19.2_
 
-  - [ ] 23.2 Create deployment guide
+  - [x] 23.2 Create deployment guide
     - Write deployment guide with Docker Compose production configuration, JWT secret management, database migration steps, knowledge base seeding instructions, monitoring setup
     - _Requirements: 19.3_
 
-- [ ] 24. Final checkpoint — Full platform verification
+- [x] 24. Final checkpoint — Full platform verification
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

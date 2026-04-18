@@ -1,24 +1,26 @@
 # 🩺 TropiCare
 
-**Système d'aide à la décision clinique propulsé par l'IA pour le diagnostic des maladies tropicales et l'antibiothérapie en Afrique de l'Ouest.**
+**AI-powered clinical decision support for tropical disease diagnosis and antibiotherapy in Togo.**
 
-TropiCare combine un pipeline multi-agents (LLM) avec la génération augmentée par récupération (RAG) pour fournir des recommandations diagnostiques et thérapeutiques fondées sur les preuves, calibrées selon l'épidémiologie du Togo — directives OMS, formulaire CAME, et données locales de résistance antimicrobienne (RAM).
+TropiCare combines a multi-agent LLM pipeline with Retrieval-Augmented Generation (RAG) to deliver evidence-based diagnostic and treatment recommendations calibrated to Togo's epidemiology — WHO guidelines, CAME formulary, and local antimicrobial resistance (AMR) data.
 
 ---
 
-## Table des matières
+## Table of Contents
 
 - [Architecture](#architecture)
-- [Pile technologique](#pile-technologique)
-- [Fonctionnalités](#fonctionnalités)
-- [Pipeline multi-agents](#pipeline-multi-agents)
-- [Pipeline RAG](#pipeline-rag)
-- [Démarrage rapide](#démarrage-rapide)
-- [Variables d'environnement](#variables-denvironnement)
-- [Commandes Make](#commandes-make)
-- [Évaluation et benchmark](#évaluation-et-benchmark)
-- [Flux de données](#flux-de-données)
-- [Observabilité](#observabilité)
+- [Tech Stack](#tech-stack)
+- [Features](#features)
+- [Multi-Agent Pipeline](#multi-agent-pipeline)
+- [RAG Pipeline](#rag-pipeline)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [Make Commands](#make-commands)
+- [API Reference](#api-reference)
+- [Evaluation & Benchmarks](#evaluation--benchmarks)
+- [Observability](#observability)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
 
 ---
 
@@ -26,162 +28,187 @@ TropiCare combine un pipeline multi-agents (LLM) avec la génération augmentée
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Frontend (Next.js 16)                        │
-│         React 19 · Zustand · Tailwind CSS 4 · NDJSON Stream        │
+│                        Frontend (Next.js 14+)                       │
+│         React · Tailwind CSS · NDJSON Streaming                     │
 └──────────────────────────────┬──────────────────────────────────────┘
-                               │ POST /api/v1/sessions/{id}/turns
+                               │ HTTPS
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     Gateway (FastAPI + Uvicorn)                      │
-│            JWT RS256 · Rate Limiting · StreamingResponse            │
+│     JWT RS256 · RBAC · Rate Limiting · Security Headers · CSRF      │
+│     OpenTelemetry · Prometheus /metrics · Circuit Breakers           │
 └──────────────┬──────────────────────────────────────┬───────────────┘
                │                                      │
                ▼                                      ▼
 ┌──────────────────────────┐          ┌───────────────────────────────┐
-│     Orchestrateur        │          │     Serveur MCP (outils)      │
-│  Intake → Diagnostic →   │◄────────►│  symptom_extractor            │
-│  Antibiothérapie →       │          │  hybrid_retrieve              │
-│  Validation              │          │  formulary_lookup             │
-│  (Claude Sonnet 4)       │          │  amr_lookup · ddi_check       │
-└──────┬───────────────────┘          │  epid_calendar · safety_class │
+│     Orchestrator         │          │     MCP Tools Server (:8001)  │
+│  Intake → Diagnostic →   │◄────────►│  hybrid_retrieve              │
+│  Antibiotherapy →        │          │  formulary_lookup             │
+│  Validation              │          │  amr_lookup · ddi_check       │
+│  (Claude Sonnet 4)       │          │  epid_calendar · safety_class │
+└──────┬───────────────────┘          │  symptom_extractor            │
        │                              └───────────────────────────────┘
        ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  PostgreSQL 16        Redis 7           Qdrant 1.9.2                │
-│  (données + FTS)      (sessions/queue)  (vecteurs 3072-dim)         │
+│  PostgreSQL 16          Redis 7           MongoDB 7                  │
+│  (data + BM25 FTS)      (sessions/cache)  (Atlas Vector Search)     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Pile technologique
-
-| Couche           | Technologies                                              |
-|------------------|-----------------------------------------------------------|
-| Frontend         | Next.js 16, React 19, Zustand, Tailwind CSS 4             |
-| Backend          | FastAPI, Uvicorn, Claude Sonnet 4, OpenTelemetry           |
-| Base de données  | PostgreSQL 16, Redis 7, Qdrant 1.9.2                      |
-| Ingestion        | ARQ (file de tâches), OpenAI text-embedding-3-large, Nomic (fallback) |
-| Observabilité    | Jaeger (traces), Prometheus + Grafana (métriques)          |
-| Infrastructure   | Docker Compose, Alembic (migrations)                       |
-| Évaluation       | Harness personnalisé, juges LLM, jeu de benchmark          |
+The Gateway streams NDJSON events progressively to the frontend, enabling real-time rendering of differential diagnoses and treatment plans. Agents communicate with the MCP Tools Server via HTTP tool calls, keeping clinical knowledge tools decoupled from agent logic.
 
 ---
 
-## Fonctionnalités
+## Tech Stack
 
-- **Diagnostic différentiel** fondé sur les preuves avec scores de confiance et codes CIM-11
-- **Recommandations d'antibiothérapie** adaptées au contexte togolais (formulaire CAME, RAM locale)
-- **Détection d'urgences** : méningite, paludisme grave, fièvre hémorragique, choc septique
-- **Vérification des interactions médicamenteuses** (DDI) et sécurité grossesse/allaitement
-- **Citations structurées** — chaque affirmation clinique est sourcée
-- **Streaming temps réel** — les résultats s'affichent progressivement (NDJSON)
-- **Contexte épidémiologique** saisonnier par région via l'outil `epid_calendar`
-- **Base de connaissances administrable** — upload PDF/DOCX avec ingestion automatique
-- **Tableau de bord analytique** pour les administrateurs
-- **Journal d'audit** immuable pour la conformité réglementaire
-
----
-
-## Pipeline multi-agents
-
-Quatre agents spécialisés s'exécutent en séquence pour chaque requête clinique :
-
-### 1. Agent d'accueil (Intake)
-Extrait le contexte patient structuré à partir du texte libre : âge, sexe, poids, région, symptômes, signes vitaux, résultats de laboratoire, allergies, médicaments en cours, statut de grossesse. Utilise l'outil MCP `symptom_extractor` pour la reconnaissance d'entités.
-
-### 2. Agent diagnostique (ReAct)
-Effectue un raisonnement itératif (jusqu'à 4 cycles Think → Observe → Act) avec récupération hybride sur 3 requêtes simultanées. Produit un diagnostic différentiel classé avec : rang, nom de la maladie, code CIM-11, confiance, preuves, tests confirmatoires, drapeaux rouges. Émet des alertes d'urgence si nécessaire.
-
-### 3. Agent d'antibiothérapie
-Appels parallèles aux outils MCP : `formulary_lookup`, `amr_lookup`, `drug_ddi_check`, `safety_classifier`. Filtre les candidats selon : disponibilité CAME, résistance RAM < 30 %, absence de contre-indications, sécurité grossesse. Produit les lignes de traitement (1ère ligne, 2ème ligne, alternatives) avec posologie, voie, fréquence, durée et surveillance.
-
-### 4. Agent de validation
-Porte de qualité déterministe (température = 0) vérifiant : présence de citations, cohérence numérique (± 20 %), drapeaux d'urgence, présence du disclaimer, langue, périmètre. Verdict : `PASS` (transmettre) | `WARN` (transmettre avec annotations) | `BLOCK` (rejeter).
+| Layer          | Technologies                                                    |
+|----------------|-----------------------------------------------------------------|
+| Frontend       | Next.js 14+, React, Tailwind CSS                               |
+| Backend        | FastAPI, Uvicorn, Claude Sonnet 4 (Anthropic), OpenTelemetry   |
+| Databases      | PostgreSQL 16, Redis 7, MongoDB 7 (Atlas Vector Search)        |
+| Ingestion      | ARQ (async task queue), OpenAI text-embedding-3-large (3072-d)  |
+| Observability  | Jaeger (traces), Prometheus + Grafana (metrics), structlog      |
+| Infrastructure | Docker Compose, Alembic (migrations)                            |
+| Testing        | pytest, Hypothesis (property-based), Jest/React Testing Library |
 
 ---
 
-## Pipeline RAG
+## Features
 
-### Ingestion (worker ARQ asynchrone)
-
-1. **Parsing** — extraction de sections depuis PDF/DOCX
-2. **Chunking** — découpage sémantique : 512 tokens max, 64 tokens de chevauchement, respect des limites de phrases
-3. **Métadonnées** — tags maladies, tags médicaments, classification du type de contenu
-4. **Embedding** — OpenAI `text-embedding-3-large` (3072 dimensions), fallback Nomic en local
-5. **Déduplication** — hash SHA-256 du contenu (16 premiers caractères)
-6. **Stockage** — upsert PostgreSQL (`kb_chunks`) + Qdrant (recherche vectorielle)
-
-### Récupération hybride
-
-- **BM25** — recherche plein texte sur PostgreSQL (tokenisation française)
-- **Similarité vectorielle** — recherche cosinus sur Qdrant
-- Combinaison des résultats, déduplication par `chunk_id`, top 8 par score
-- Filtrage par métadonnées (région, tags maladies, type de source)
+- **Differential diagnosis** with confidence scores and ICD-11 codes
+- **Antibiotherapy recommendations** adapted to Togo (CAME formulary, local AMR data)
+- **Emergency detection**: meningitis, severe malaria, viral hemorrhagic fever, septic shock
+- **Drug interaction checking** (DDI) and pregnancy/lactation safety
+- **Structured citations** — every clinical assertion is sourced
+- **Real-time streaming** — results render progressively via NDJSON
+- **Seasonal epidemiological context** per region via `epid_calendar` tool
+- **Administrable knowledge base** — upload PDF/DOCX with automatic ingestion
+- **Admin analytics dashboard**
+- **Immutable audit log** for regulatory compliance
+- **Security hardening** — CSRF, rate limiting, security headers, PII hashing in audit logs
 
 ---
 
-## Démarrage rapide
+## Multi-Agent Pipeline
 
-### Prérequis
+Four specialized agents execute sequentially for each clinical query:
 
-- Docker et Docker Compose
+### 1. Intake Agent
+Extracts structured patient context from free text: age, sex, weight, region, symptoms, vital signs, lab results, allergies, current medications, pregnancy status. Uses the MCP `symptom_extractor` tool for entity recognition.
+
+### 2. Diagnostic Agent (ReAct)
+Performs iterative reasoning (up to 4 Think → Observe → Act cycles) with hybrid retrieval across 3 simultaneous queries. Produces a ranked differential diagnosis with: rank, disease name, ICD-11 code, confidence, supporting evidence, confirmatory tests, red flags. Emits emergency alerts when critical conditions are detected.
+
+### 3. Antibiotherapy Agent
+Parallel MCP tool calls: `formulary_lookup`, `amr_lookup`, `drug_ddi_check`, `safety_classifier`. Filters candidates by: CAME availability, AMR resistance < 30%, absence of contraindications, pregnancy safety. Produces treatment lines (1st line, 2nd line, alternatives) with dosage, route, frequency, duration, and monitoring.
+
+### 4. Validation Agent
+Deterministic quality gate (temperature = 0) checking: citation presence, numeric consistency (± 20%), emergency flags, disclaimer presence, language, scope. Verdict: `PASS` | `WARN` (forward with annotations) | `BLOCK` (reject).
+
+---
+
+## RAG Pipeline
+
+### Ingestion (async ARQ worker)
+
+1. **Parsing** — section extraction from PDF/DOCX
+2. **Chunking** — semantic splitting: 512 tokens max, 64 token overlap, sentence boundary respect
+3. **Metadata** — disease tags, drug tags, content type classification
+4. **Embedding** — OpenAI `text-embedding-3-large` (3072 dimensions)
+5. **Deduplication** — SHA-256 content hash
+6. **Storage** — upsert to PostgreSQL (`kb_chunks` for BM25) + MongoDB (`kb_vectors` for vector search)
+
+### Hybrid Retrieval
+
+- **BM25** — full-text search on PostgreSQL (French tokenization)
+- **Vector similarity** — cosine search on MongoDB Atlas Vector Search (3072-dim)
+- **Fusion** — Reciprocal Rank Fusion (RRF) + cross-encoder reranking
+- Metadata filtering by region, disease tags, content type
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose v2+
 - Python 3.12+
-- Node.js 20+ et npm
-- Clés API : `ANTHROPIC_API_KEY` et `OPENAI_API_KEY`
+- Node.js 20+ and npm
+- API keys: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
 
-### Installation en 5 étapes
+### Setup
 
-**1. Cloner et configurer**
+**1. Clone and configure**
 
 ```bash
 git clone <repo-url> && cd tropicare
 cp .env.example .env
-# Renseigner ANTHROPIC_API_KEY et OPENAI_API_KEY dans .env
+# Fill in ANTHROPIC_API_KEY and OPENAI_API_KEY in .env
 ```
 
-**2. Générer la paire de clés JWT (RS256)**
+**2. Generate JWT key pair (RS256)**
 
 ```bash
 make keys
 ```
 
-**3. Démarrer la stack complète** (build des images, migrations, bootstrap Qdrant)
+**3. Start the full stack** (builds images, runs migrations, initializes MongoDB replica set)
 
 ```bash
 make up
 ```
 
-**4. Alimenter la base de connaissances** (placer les PDF dans `data/seed_documents/`)
+**4. Seed the knowledge base** (place PDFs in `data/seed_documents/`)
 
 ```bash
 make seed
 ```
 
-**5. Vérifier**
+**5. Verify**
 
 ```bash
 curl http://localhost:8000/api/v1/health
+# → {"status":"ok","service":"tropicare-gateway"}
 ```
 
-### Accès aux services
+### Service URLs
 
 | Service    | URL                          | Notes                        |
 |------------|------------------------------|------------------------------|
-| Frontend   | http://localhost:3000         | Interface clinicien          |
-| Gateway    | http://localhost:8000         | API REST                     |
+| Frontend   | http://localhost:3000         | Clinician interface          |
+| Gateway    | http://localhost:8000         | REST API                     |
+| MCP Tools  | http://localhost:8001         | MCP tool server              |
 | Grafana    | http://localhost:3001         | admin / tropicare            |
-| Jaeger     | http://localhost:16686        | Traces distribuées           |
-| Qdrant     | http://localhost:6333         | Dashboard vectoriel          |
-| Prometheus | http://localhost:9090         | Métriques                    |
+| Jaeger     | http://localhost:16686        | Distributed traces           |
+| Prometheus | http://localhost:9090         | Metrics                      |
 
-### Créer un utilisateur admin
+### Create an admin user
 
 ```bash
-make create-admin email=admin@tropicare.health password=motdepasse
+make create-admin email=admin@tropicare.health password=AdminPass123
 ```
 
-### Développement frontend (hors Docker)
+### Create the first admin user
+
+Dev users are seeded automatically by the migration. After `docker compose up`:
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin + Clinician | admin@tropicare.health | AdminPass123 |
+| Clinician | clinician@tropicare.health | ClinicPass123 |
+
+These are created by migration `0007_seed_dev_users` and removed on `alembic downgrade -1`.
+
+To create additional users:
+
+```bash
+# Via the registration API
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"medecin@hopital.tg","password":"SecurePass1","role":"clinician"}'
+```
+
+### Frontend development (outside Docker)
 
 ```bash
 cd frontend
@@ -191,156 +218,157 @@ npm run dev
 
 ---
 
-## Variables d'environnement
+## Environment Variables
 
-| Variable               | Description                                      | Défaut                          |
-|------------------------|--------------------------------------------------|---------------------------------|
-| `ANTHROPIC_API_KEY`    | Clé API Anthropic (Claude)                       | —                               |
-| `OPENAI_API_KEY`       | Clé API OpenAI (embeddings)                      | —                               |
-| `DATABASE_URL`         | URL de connexion PostgreSQL                      | `postgresql://tropicare:tropicare@localhost:5432/tropicare` |
-| `REDIS_URL`            | URL Redis                                        | `redis://localhost:6379/0`      |
-| `QDRANT_URL`           | URL du serveur Qdrant                            | `http://localhost:6333`         |
-| `QDRANT_COLLECTION`    | Nom de la collection Qdrant                      | `tropicare_knowledge`           |
-| `MCP_URL`              | URL du serveur d'outils MCP                      | `http://localhost:8001`         |
-| `MODEL`                | Modèle LLM utilisé                               | `claude-sonnet-4-20250514`      |
-| `JWT_PUBLIC_KEY_PATH`  | Chemin vers la clé publique JWT                  | `keys/public.pem`              |
-| `JWT_PRIVATE_KEY_PATH` | Chemin vers la clé privée JWT                    | `keys/private.pem`             |
-| `CORS_ORIGINS`         | Origines CORS autorisées (JSON array)            | `["http://localhost:3000"]`     |
-| `ENABLE_LLM_JUDGES`   | Activer les juges LLM pour l'évaluation (0/1)   | `0`                             |
+| Variable               | Description                              | Default                                                      |
+|------------------------|------------------------------------------|--------------------------------------------------------------|
+| `ANTHROPIC_API_KEY`    | Anthropic API key (Claude)               | — (required)                                                 |
+| `OPENAI_API_KEY`       | OpenAI API key (embeddings)              | — (required)                                                 |
+| `DATABASE_URL`         | PostgreSQL connection URL                | `postgresql://tropicare:tropicare@localhost:5432/tropicare`   |
+| `REDIS_URL`            | Redis connection URL                     | `redis://localhost:6379/0`                                   |
+| `MONGODB_URI`          | MongoDB connection URI                   | `mongodb://localhost:27017`                                  |
+| `MONGODB_DB`           | MongoDB database name                    | `tropicare`                                                  |
+| `MCP_URL`              | MCP Tools Server URL                     | `http://localhost:8001`                                      |
+| `MODEL`                | LLM model identifier                     | `claude-sonnet-4-20250514`                                   |
+| `JWT_PUBLIC_KEY_PATH`  | Path to JWT RS256 public key             | `keys/public.pem`                                            |
+| `CORS_ORIGINS`         | Allowed CORS origins (JSON array)        | `["http://localhost:3000"]`                                  |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint  | `http://jaeger:4317`                                         |
 
 ---
 
-## Commandes Make
+## Make Commands
 
 ```bash
-make help             # Afficher toutes les cibles disponibles
-make install          # Installer les dépendances Python
-make keys             # Générer la paire de clés JWT RS256
-make up               # Démarrer la stack complète (Docker Compose)
-make down             # Arrêter tous les conteneurs
-make logs             # Suivre les logs (make logs svc=gateway)
-make ps               # État des conteneurs
-make migrate          # Exécuter les migrations Alembic (Docker)
-make migrate-local    # Exécuter les migrations en local
-make seed             # Alimenter la base de connaissances
-make create-admin     # Créer un admin (email=... password=...)
-make lint             # Lancer ruff + mypy
-make format           # Formater le code (ruff)
-make test             # Tests unitaires (pytest)
-make test-integration # Tests d'intégration
-make eval             # Lancer le pipeline d'évaluation
-make benchmark-gen    # Générer les cas de benchmark restants
-make benchmark-review # Revue interactive des cas générés
-make clean            # Supprimer les artefacts de build
-make clean-data       # Supprimer toutes les données locales (volumes Docker)
+make help             # Show all available targets
+make install          # Install Python dependencies
+make keys             # Generate RS256 JWT key pair
+make up               # Start full stack (Docker Compose)
+make down             # Stop all containers
+make logs             # Tail logs (make logs svc=gateway)
+make ps               # Container status
+make migrate          # Run Alembic migrations (Docker)
+make migrate-local    # Run Alembic migrations locally
+make seed             # Seed the knowledge base
+make create-admin     # Create admin user (email=... password=...)
+make lint             # Run ruff + mypy
+make format           # Format code (ruff)
+make test             # Unit tests (pytest)
+make test-integration # Integration tests
+make eval             # Run evaluation pipeline
+make clean            # Remove build artifacts
+make clean-data       # Remove all local data (Docker volumes)
 ```
 
 ---
 
-## Évaluation et benchmark
+## API Reference
 
-### Workflow pour atteindre 200 cas validés
+All endpoints are served by the Gateway on port 8000. Authentication uses JWT RS256 Bearer tokens. See [docs/api.md](docs/api.md) for the full API reference with request/response schemas and example curl commands.
 
-**Étape 1** — Valider les cas seed avec un clinicien partenaire togolais (revue manuelle de `benchmark_v1_seed.json`)
+### Quick Overview
 
-**Étape 2** — Générer les 160 cas restants (~8-12 $ en appels API)
-
-```bash
-make benchmark-gen
-```
-
-**Étape 3** — Revue interactive par le clinicien
-
-```bash
-make benchmark-review
-```
-
-**Étape 4** — Lancer l'évaluation
-
-```bash
-make eval
-```
-
-### Métriques mesurées
-
-**Diagnostic :**
-- Précision top-1 / top-3 / top-5 (code CIM-11 ou nom de maladie)
-- MRR (Mean Reciprocal Rank)
-- Rappel des drapeaux d'urgence
-- Taux de citation (citations / affirmations estimées)
-- Latence (p50, p95)
-
-**Antibiothérapie :**
-- Adhérence 1ère ligne (≥ 1 médicament attendu présent)
-- Disponibilité CAME
-- Absence de médicaments contre-indiqués
-- Présence du disclaimer
-- Nombre de citations
-
-**Juges LLM** (échantillon 20 % pour limiter les coûts) :
-- Juge qualité des citations : vérifie le sourçage et la cohérence numérique
-- Juge hallucination : détecte les médicaments inventés, posologies impossibles, associations aberrantes
+| Method   | Endpoint                                | Auth       | Rate Limit | Description                    |
+|----------|-----------------------------------------|------------|------------|--------------------------------|
+| `POST`   | `/api/v1/auth/register`                 | None       | 10/min     | Register a new user            |
+| `POST`   | `/api/v1/auth/login`                    | None       | 10/min     | Login, get JWT tokens          |
+| `POST`   | `/api/v1/auth/refresh`                  | None       | 10/min     | Refresh access token           |
+| `GET`    | `/api/v1/auth/me`                       | Bearer     | —          | Get current user profile       |
+| `POST`   | `/api/v1/sessions`                      | Clinician  | 30/min     | Create consultation session    |
+| `GET`    | `/api/v1/sessions/{id}`                 | Clinician  | —          | Get session state              |
+| `POST`   | `/api/v1/sessions/{id}/turns`           | Clinician  | 60/min     | Submit query, stream response  |
+| `POST`   | `/api/v1/feedback`                      | Clinician  | —          | Submit clinician feedback      |
+| `GET`    | `/api/v1/admin/documents`               | Admin      | —          | List KB documents              |
+| `POST`   | `/api/v1/admin/documents`               | Admin      | —          | Upload KB document             |
+| `DELETE` | `/api/v1/admin/documents/{id}`          | Admin      | —          | Supersede a document           |
+| `GET`    | `/api/v1/admin/analytics`               | Admin      | —          | Get analytics summary          |
+| `GET`    | `/api/v1/health`                        | None       | —          | Health check                   |
+| `GET`    | `/metrics`                              | None       | —          | Prometheus metrics             |
 
 ---
 
-## Flux de données
+## Evaluation & Benchmarks
 
-```
-Le clinicien saisit sa requête
-  → Next.js ChatStream (hook useStream ouvre un flux NDJSON)
-  → POST /api/v1/sessions/{id}/turns (gateway FastAPI)
-  → JWT vérifié → rate-limit appliqué → StreamingResponse créée
-  → Orchestrator.handle_turn() commence à émettre des événements :
-      ├── IntakeAgent     → MCP : symptom_extractor
-      ├── DiagnosticAgent → MCP : hybrid_retrieve (×3) + epid_calendar
-      │     └── Boucle ReAct : si "RETRIEVE:" → récupère plus de chunks
-      ├── AntibiotherapyAgent → MCP : formulary_lookup + amr_lookup + ddi_check (parallèle)
-      └── ValidationAgent → porte PASS / WARN / BLOCK
-  → chaque événement streamé en NDJSON : {"type": "...", "data": {...}}\n
-  → le worker d'ingestion (ARQ) traite les uploads KB indépendamment
-```
+### Workflow
 
-Types d'événements streamés : `thinking` → `emergency_flag` → `differential_item` → `treatment_line` → `citation` → `done`
+1. Validate seed cases with a Togolese partner clinician
+2. Generate remaining cases: `make benchmark-gen`
+3. Interactive clinician review: `make benchmark-review`
+4. Run evaluation: `make eval`
+
+### Metrics
+
+**Diagnostic:** top-1/3/5 accuracy (ICD-11), MRR, emergency recall, citation rate, latency (p50/p95)
+
+**Antibiotherapy:** 1st-line adherence, CAME coverage, contraindication absence, disclaimer rate, citation count
 
 ---
 
-## Observabilité
+## Observability
 
-- **Jaeger** (http://localhost:16686) — traces distribuées via OpenTelemetry (OTLP gRPC/HTTP)
-- **Prometheus** (http://localhost:9090) — collecte des métriques applicatives
-- **Grafana** (http://localhost:3001) — tableaux de bord préconfigurés (identifiants : admin / tropicare)
-- **Journal d'audit** — table PostgreSQL immuable, partitionnée par année, pour la conformité réglementaire
+- **Jaeger** (http://localhost:16686) — distributed traces via OpenTelemetry (OTLP gRPC)
+- **Prometheus** (http://localhost:9090) — application metrics (request count, agent latency histograms, error rates)
+- **Grafana** (http://localhost:3001) — pre-provisioned dashboards (admin / tropicare)
+- **Structured logging** — JSON via structlog with request_id, session_id, agent_name, latency_ms
+- **Audit log** — immutable PostgreSQL table, partitioned by year
 
 ---
 
-## Structure du projet
+## Project Structure
 
 ```
 tropicare/
 ├── backend/
 │   └── app/
-│       ├── agents/          # Agents LLM (intake, diagnostic, antibiothérapie, validation)
-│       ├── api/             # Routes FastAPI
-│       ├── config/          # Configuration et settings
-│       ├── eval/            # Framework d'évaluation et benchmark
-│       ├── gateway/         # Point d'entrée API, auth JWT, rate limiting
-│       ├── ingestion/       # Pipeline d'ingestion (parsing, chunking, embedding)
-│       ├── models/          # Schémas Pydantic
-│       ├── orchestrator/    # Orchestration des agents, sessions, audit
-│       ├── rag/             # Récupération hybride (BM25 + vectoriel)
-│       └── tools/           # Serveur MCP (outils externes)
+│       ├── agents/          # LLM agents (intake, diagnostic, antibiotherapy, validation)
+│       ├── config/          # Consolidated settings
+│       ├── gateway/         # FastAPI app, JWT auth, RBAC, middleware, routers
+│       ├── ingestion/       # Document ingestion pipeline (parsing, chunking, embedding)
+│       ├── models/          # Pydantic schemas
+│       ├── observability/   # Tracing, metrics, structured logging
+│       ├── orchestrator/    # Agent pipeline controller, session store, audit logger
+│       ├── tools/           # MCP tool server (MongoDB Atlas Vector Search)
+│       └── eval/            # Evaluation harness and benchmarks
 ├── frontend/
 │   └── src/
-│       ├── app/             # Pages Next.js (App Router)
-│       ├── components/      # Composants React (chat, intake, résultats)
-│       └── hooks/           # Hooks personnalisés (useStream)
-├── alembic/                 # Migrations de base de données
-├── docker-compose.yml       # Stack d'infrastructure complète
-└── Makefile                 # Commandes de développement
+│       ├── app/             # Next.js pages (App Router)
+│       ├── components/      # React components (chat, intake, results)
+│       ├── hooks/           # Custom hooks (useStream)
+│       └── lib/             # Shared types and utilities
+├── tests/
+│   ├── unit/                # Unit tests (agents, tools)
+│   ├── integration/         # Integration tests (API, orchestrator)
+│   └── property/            # Hypothesis property-based tests
+├── alembic/                 # Database migrations
+├── docker/                  # Dockerfiles, Prometheus/Grafana config
+├── scripts/                 # Admin and seeding scripts
+├── keys/                    # JWT RS256 key pair (generated, gitignored)
+├── docker-compose.yml       # Full infrastructure stack
+├── pyproject.toml           # Python project config and pytest settings
+└── Makefile                 # Development commands
 ```
 
 ---
 
-## Licence
+## Testing
 
-À définir.
+```bash
+# Unit tests
+make test
+
+# Integration tests (requires running stack)
+make test-integration
+
+# Property-based tests only
+pytest tests/property/ -v
+
+# All tests with markers
+pytest -m unit          # unit tests only
+pytest -m integration   # integration tests only
+pytest -m property      # property-based tests only
+```
+
+---
+
+## License
+
+TBD.

@@ -651,25 +651,145 @@ def _rrf(dense: list[Chunk], sparse: list[Chunk], k: int = 60) -> list[Chunk]:
         merged.append(chunk)
     return merged
 
+def _hybrid_cache_key(input: HybridRetrieveInput) -> str:
+    """Compute a deterministic Redis cache key for hybrid_retrieve parameters."""
+    raw = json.dumps(
+        {
+            "query": input.query,
+            "k": input.k,
+            "disease_tags": sorted(input.disease_tags) if input.disease_tags else None,
+            "language": input.language,
+        },
+        sort_keys=True,
+    )
+    return f"hybrid:{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
 @mcp.tool(description="Full hybrid retrieval pipeline: dense + BM25 + RRF + cross-encoder rerank")
 async def hybrid_retrieve(input: HybridRetrieveInput) -> list[Chunk]:
-    with tracer.start_as_current_span("tool.hybrid_retrieve"):
-        dense_task  = vector_search(VectorSearchInput(
-            query=input.query, k=20,
-            disease_tags=input.disease_tags, language=input.language,
-        ))
-        sparse_task = bm25_search(BM25SearchInput(
+    with tracer.start_as_current_span("tool.hybrid_retrieve") as span:
+        # ── Check Redis cache ─────────────────────────────────────
+        cache_key = _hybrid_cache_key(input)
+        try:
+            redis = await get_redis()
+            cached = await redis.get(cache_key)
+            if cached is not None:
+                span.set_attribute("cache_hit", True)
+                return [Chunk(**c) for c in json.loads(cached)]
+        except Exception:
+            log.debug("Redis unavailable for hybrid_retrieve cache lookup — proceeding without cache")
+
+        span.set_attribute("cache_hit", False)
+
+        # ── Attempt dense vector search; fall back to BM25-only if MongoDB is unreachable
+        dense: list[Chunk] = []
+        vector_fallback = False
+        try:
+            dense = await vector_search(VectorSearchInput(
+                query=input.query, k=20,
+                disease_tags=input.disease_tags, language=input.language,
+            ))
+        except Exception as exc:
+            vector_fallback = True
+            log.error(
+                "MongoDB vector search unreachable — falling back to BM25-only retrieval. "
+                "MongoDB URI: %s, error: %s",
+                settings.MONGODB_URI,
+                exc,
+            )
+            span.set_attribute("vector_fallback", True)
+
+        sparse = await bm25_search(BM25SearchInput(
             query=input.query, k=20, language=input.language,
         ))
-        dense, sparse = await asyncio.gather(dense_task, sparse_task)
-        merged = _rrf(dense, sparse)
+
+        if vector_fallback:
+            # BM25-only path: rerank sparse results directly
+            merged = sparse
+        else:
+            merged = _rrf(dense, sparse)
+
         reranked = await cross_encode_rerank(RerankInput(
             query=input.query, chunks=merged[:30], top_n=input.k,
         ))
+
+        # Empty KB: annotate when no results found at all
+        if not reranked:
+            span.set_attribute("empty_kb", True)
+            log.warning(
+                "hybrid_retrieve returned 0 chunks for query=%r — knowledge base may be empty",
+                input.query[:80],
+            )
+
+        # ── Store result in Redis cache (1-hour TTL) ──────────────
+        try:
+            redis = await get_redis()
+            await redis.setex(
+                cache_key,
+                3600,  # 1-hour TTL
+                json.dumps([c.model_dump() for c in reranked]),
+            )
+        except Exception:
+            log.debug("Redis unavailable for hybrid_retrieve cache write — skipping")
+
+        span.set_attribute("results_count", len(reranked))
+        span.set_attribute("vector_fallback", vector_fallback)
         return reranked
 
 # ─────────────────────────────────────────────────────────────
-# Server entry point
+# Server entry point — lightweight FastAPI wrapper
 # ─────────────────────────────────────────────────────────────
 
-app = mcp.get_asgi_app()   # ASGI compatible — mount in FastAPI or run standalone
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
+
+_app = FastAPI(title="TropiCare MCP Tools", version="1.0.0")
+
+# Collect all registered tool functions by name
+_TOOLS: dict[str, Any] = {}
+for _name in [
+    "vector_search", "bm25_search", "cross_encode_rerank",
+    "epid_calendar", "formulary_lookup", "amr_lookup",
+    "drug_ddi_check", "safety_classifier", "symptom_extractor",
+    "citation_formatter", "hybrid_retrieve",
+]:
+    _fn = globals().get(_name)
+    if _fn is not None:
+        _TOOLS[_name] = _fn
+
+
+@_app.get("/health")
+async def health():
+    return {"status": "ok", "service": "tropicare-tools"}
+
+
+@_app.post("/tools/{tool_name}")
+async def call_tool(tool_name: str, request: Request):
+    fn = _TOOLS.get(tool_name)
+    if fn is None:
+        return JSONResponse({"error": f"Unknown tool: {tool_name}"}, status_code=404)
+    kwargs = await request.json()
+    # Each tool expects a single Pydantic input object; find its type hint
+    import inspect
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    if params:
+        input_type = params[0].annotation
+        if input_type is not inspect.Parameter.empty:
+            inp = input_type(**kwargs)
+            result = await fn(inp)
+        else:
+            result = await fn(**kwargs)
+    else:
+        result = await fn()
+    # Serialize result
+    if isinstance(result, list):
+        return [item.model_dump() if hasattr(item, "model_dump") else item for item in result]
+    elif hasattr(result, "model_dump"):
+        return result.model_dump()
+    else:
+        return result
+
+
+app = _app

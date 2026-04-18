@@ -1,12 +1,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # docker-compose.yml
 # ─────────────────────────────────────────────────────────────────────────────
-version: "3.9"
 
 x-common-env: &common-env
   DATABASE_URL:       postgresql://tropicare:tropicare@postgres:5432/tropicare
   REDIS_URL:          redis://redis:6379/0
-  MONGODB_URI:        mongodb://mongodb:27017/tropicare?replicaSet=rs0
+  MONGODB_URI:        mongodb://mongodb:27017/tropicare?replicaSet=rs0&directConnection=true
   MONGODB_DB:         tropicare
   MCP_URL:            http://mcp-tools:8001
   MODEL:              claude-sonnet-4-20250514
@@ -67,11 +66,23 @@ services:
     depends_on:
       mongodb: {condition: service_healthy}
     restart: "no"
-    entrypoint: >
-      mongosh --host mongodb:27017 --eval '
-        try { rs.status() }
-        catch(e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] }) }
-      '
+    command:
+      - "mongosh"
+      - "--host"
+      - "mongodb:27017"
+      - "--eval"
+      - "try { rs.status() } catch(e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] }) }"
+
+  # ── Alembic migrations (runs once, exits) ───────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.migrate
+    environment:
+      DATABASE_URL: postgresql://tropicare:tropicare@postgres:5432/tropicare
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
 
   # ── MCP Tool Server ─────────────────────────────────────────────────────────
   mcp-tools:
@@ -83,9 +94,10 @@ services:
       <<: *common-env
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
-      postgres: {condition: service_healthy}
-      redis:    {condition: service_healthy}
-      mongodb:  {condition: service_healthy}
+      postgres:   {condition: service_healthy}
+      redis:      {condition: service_healthy}
+      mongodb:    {condition: service_healthy}
+      mongo-init: {condition: service_completed_successfully}
     ports:
       - "8001:8001"
     healthcheck:
@@ -106,12 +118,17 @@ services:
       OPENAI_API_KEY:    ${OPENAI_API_KEY}
       CORS_ORIGINS:      '["http://localhost:3000","https://tropicare.health"]'
       JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public.pem
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private.pem
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     secrets:
       - jwt_public.pem
+      - jwt_private.pem
     depends_on:
-      postgres:  {condition: service_healthy}
-      redis:     {condition: service_healthy}
-      mcp-tools: {condition: service_healthy}
+      postgres:   {condition: service_healthy}
+      redis:      {condition: service_healthy}
+      mcp-tools:  {condition: service_healthy}
+      mongo-init: {condition: service_completed_successfully}
+      migrate:    {condition: service_completed_successfully}
     ports:
       - "8000:8000"
     healthcheck:
@@ -132,32 +149,20 @@ services:
     volumes:
       - kb_raw:/tmp/kb_raw
     depends_on:
-      postgres: {condition: service_healthy}
-      redis:    {condition: service_healthy}
-      mongodb:  {condition: service_healthy}
-
-  # ── Alembic migrations (runs once, exits) ───────────────────────────────────
-  migrate:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.gateway
-    command: alembic upgrade head
-    environment:
-      DATABASE_URL: postgresql://tropicare:tropicare@postgres:5432/tropicare
-    depends_on:
-      postgres: {condition: service_healthy}
-    restart: "no"
+      postgres:   {condition: service_healthy}
+      redis:      {condition: service_healthy}
+      mongo-init: {condition: service_completed_successfully}
 
   # ── Next.js Frontend ─────────────────────────────────────────────────────────
   frontend:
     build:
-      context: ./apps/frontend
+      context: ./frontend
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: http://gateway:8000
+      BACKEND_URL: http://gateway:8000
+    volumes:
+      - ./keys/public.pem:/app/keys/public.pem:ro
     depends_on:
       gateway: {condition: service_healthy}
     ports:
@@ -191,7 +196,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: tropicare
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-tropicare}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
     depends_on:
       - prometheus
@@ -209,37 +214,5 @@ volumes:
 secrets:
   jwt_public.pem:
     file: ./keys/public.pem
-
----
-# ─────────────────────────────────────────────────────────────────────────────
-# docker/Dockerfile.gateway
-# ─────────────────────────────────────────────────────────────────────────────
-# FROM python:3.12-slim
-#
-# WORKDIR /app
-# RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
-# COPY requirements/gateway.txt requirements.txt
-# RUN pip install --no-cache-dir -r requirements.txt
-# COPY . .
-# CMD ["uvicorn", "tropicare_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# docker/Dockerfile.mcp
-# ─────────────────────────────────────────────────────────────────────────────
-# FROM python:3.12-slim
-# WORKDIR /app
-# COPY requirements/mcp.txt requirements.txt
-# RUN pip install --no-cache-dir -r requirements.txt
-# COPY . .
-# CMD ["uvicorn", "tropicare_tools.server:app", "--host", "0.0.0.0", "--port", "8001"]
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# docker/Dockerfile.worker
-# ─────────────────────────────────────────────────────────────────────────────
-# FROM python:3.12-slim
-# RUN apt-get update && apt-get install -y --no-install-recommends libmupdf-dev && rm -rf /var/lib/apt/lists/*
-# WORKDIR /app
-# COPY requirements/worker.txt requirements.txt
-# RUN pip install --no-cache-dir -r requirements.txt
-# COPY . .
-# CMD ["arq", "tropicare_ingestion.worker.WorkerSettings"]
+  jwt_private.pem:
+    file: ./keys/private.pem

@@ -3,24 +3,37 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+# ── Enums ────────────────────────────────────────────────────────────────────
+
+
+class TogoRegion(str, Enum):
+    """Valid Togo administrative regions."""
+    MARITIME = "Maritime"
+    PLATEAUX = "Plateaux"
+    CENTRALE = "Centrale"
+    KARA = "Kara"
+    SAVANES = "Savanes"
 
 
 # ── Patient Context ──────────────────────────────────────────────────────────
 
 
 class LabResult(BaseModel):
-    name: str
-    value: str
-    unit: str
+    name: str = Field(max_length=5000)
+    value: str = Field(max_length=5000)
+    unit: str = Field(max_length=5000)
 
 
 class Medication(BaseModel):
-    name: str
-    dose: str
-    frequency: str
+    name: str = Field(max_length=5000)
+    dose: str = Field(max_length=5000)
+    frequency: str = Field(max_length=5000)
 
 
 class VitalSigns(BaseModel):
@@ -34,23 +47,23 @@ class VitalSigns(BaseModel):
 
 
 class Symptom(BaseModel):
-    text: str
-    normalized: str | None = None
-    snomed_code: str | None = None
+    text: str = Field(max_length=5000)
+    normalized: str | None = Field(default=None, max_length=5000)
+    snomed_code: str | None = Field(default=None, max_length=5000)
 
 
 class PatientContext(BaseModel):
     age_years: int
     sex: Literal["M", "F"]
     weight_kg: float | None = None
-    region: str  # Maritime | Plateaux | Centrale | Kara | Savanes
-    chief_complaint: str
+    region: TogoRegion
+    chief_complaint: str = Field(max_length=5000)
     symptoms: list[Symptom] = []
     vital_signs: VitalSigns | None = None
     lab_results: list[LabResult] = []
     current_medications: list[Medication] = []
     allergies: list[str] = []
-    pregnancy_status: str = "not_applicable"
+    pregnancy_status: str = Field(default="not_applicable", max_length=5000)
     symptom_onset_days: int | None = None
     travel_history: list[str] = []
 
@@ -59,16 +72,16 @@ class PatientContext(BaseModel):
 
 
 class ConfirmatoryTest(BaseModel):
-    name: str
+    name: str = Field(max_length=5000)
     priority: Literal["urgent", "standard", "optional"]
     availability_togo: Literal["disponible", "limité", "indisponible"]
-    interpretation: str | None = None
+    interpretation: str | None = Field(default=None, max_length=5000)
 
 
 class DiagnosisItem(BaseModel):
     rank: int
-    disease_name: str
-    icd11_code: str
+    disease_name: str = Field(max_length=5000)
+    icd11_code: str = Field(max_length=5000)
     confidence: float = Field(ge=0.0, le=1.0)
     supporting_evidence: list[str]
     against_evidence: list[str] = []
@@ -78,16 +91,16 @@ class DiagnosisItem(BaseModel):
 
 
 class EmergencyFlag(BaseModel):
-    disease: str
+    disease: str = Field(max_length=5000)
     level: Literal["critical", "urgent"]
-    action: str
+    action: str = Field(max_length=5000)
 
 
 class DiagnosticDifferential(BaseModel):
     emergency_flags: list[EmergencyFlag] = []
     differential: list[DiagnosisItem]
     clarifying_questions: list[str] = []
-    reasoning_summary: str = ""
+    reasoning_summary: str = Field(default="", max_length=5000)
     citations: list[dict] = []
 
 
@@ -95,60 +108,60 @@ class DiagnosticDifferential(BaseModel):
 
 
 class DrugRegimen(BaseModel):
-    drug_name: str
-    generic_name: str
+    drug_name: str = Field(max_length=5000)
+    generic_name: str = Field(max_length=5000)
     came_available: bool
-    dose: str
-    dose_mg_per_kg: str | None = None
+    dose: str = Field(max_length=5000)
+    dose_mg_per_kg: str | None = Field(default=None, max_length=5000)
     route: Literal["PO", "IV", "IM", "SC", "topique"]
-    frequency: str
+    frequency: str = Field(max_length=5000)
     duration_days: int
-    pregnancy_class: str | None = None
+    pregnancy_class: str | None = Field(default=None, max_length=5000)
     ddi_warnings: list[str] = []
-    amr_note: str | None = None
+    amr_note: str | None = Field(default=None, max_length=5000)
     monitoring: list[str] = []
     citations: list[int] = []
 
 
 class Contraindication(BaseModel):
-    drug: str
-    reason: str
+    drug: str = Field(max_length=5000)
+    reason: str = Field(max_length=5000)
 
 
 class TreatmentPlan(BaseModel):
-    target_disease: str
-    clinical_rationale: str
+    target_disease: str = Field(max_length=5000)
+    clinical_rationale: str = Field(max_length=5000)
     first_line: list[DrugRegimen]
     second_line: list[DrugRegimen] = []
     alternatives: list[DrugRegimen] = []
     contraindicated: list[Contraindication] = []
     supportive_care: list[str] = []
-    follow_up_guidance: str = ""
-    referral_criteria: str = ""
-    disclaimer: str  # Mandatory regulatory disclaimer
+    follow_up_guidance: str = Field(default="", max_length=5000)
+    referral_criteria: str = Field(default="", max_length=5000)
+    disclaimer: str = Field(max_length=5000)  # Mandatory regulatory disclaimer
 
 
 # ── AMR / DDI / Safety ───────────────────────────────────────────────────────
 
 
 class AMRProfile(BaseModel):
-    drug: str
-    pathogen: str
-    region: str
+    drug: str = Field(max_length=5000)
+    pathogen: str = Field(max_length=5000)
+    region: str = Field(max_length=5000)
     resistance_pct: float | None
-    data_source: str
+    data_source: str = Field(max_length=5000)
     year: int | None
     confidence: Literal["high", "medium", "low", "no_data"]
-    recommendation: str
+    recommendation: str = Field(max_length=5000)
 
 
 class DDIWarning(BaseModel):
-    drug_a: str
-    drug_b: str
+    drug_a: str = Field(max_length=5000)
+    drug_b: str = Field(max_length=5000)
     severity: Literal["contraindicated", "major", "moderate", "minor"]
-    mechanism: str
-    clinical_effect: str
-    management: str
+    mechanism: str = Field(max_length=5000)
+    clinical_effect: str = Field(max_length=5000)
+    management: str = Field(max_length=5000)
 
 
 # ── Consultation Response (full pipeline output) ─────────────────────────────
