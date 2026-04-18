@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# pyproject.toml — Project metadata and pytest configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+[project]
+name = "tropicare"
+version = "0.1.0"
+description = "AI-powered clinical decision support for tropical disease diagnosis and antibiotherapy in Togo"
+requires-python = ">=3.12"
+
+# ── pytest ───────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast isolated tests with mocked dependencies",
+    "integration: tests requiring running services (DB, Redis, Gateway)",
+    "property: Hypothesis property-based tests",
+    "eval: evaluation harness benchmark tests (slow, requires live services)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+addopts = "-v --tb=short --strict-markers"
+
+# ── Hypothesis ───────────────────────────────────────────────────────────────
+
+[tool.hypothesis]
+database_backend = "directory"
