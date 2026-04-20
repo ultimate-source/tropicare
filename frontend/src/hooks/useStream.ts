@@ -2,25 +2,42 @@
 // hooks/useStream.ts
 // HTTP chunked streaming via fetch() + ReadableStream.
 // The server emits NDJSON: one JSON object per line, no SSE envelope.
+//
+// Accumulates conversation history as Turn[] so previous results remain
+// visible when the clinician asks follow-up questions.
 // ─────────────────────────────────────────────────────────────────────────────
 "use client"
 
 import { useCallback, useRef, useState } from "react"
-import type { SSEEvent, DiagnosisItem, TreatmentPlanData, Citation, EmergencyFlag } from "@/lib/types"
+import type { SSEEvent, DiagnosisItem, TreatmentPlanData, Citation, EmergencyFlag, DrugRegimen } from "@/lib/types"
 
-export interface StreamState {
+// ── Turn — a single completed or in-progress query/response cycle ────────────
+
+export interface Turn {
+  query:        string
   thinking:     string[]
   emergencies:  EmergencyFlag[]
   differential: DiagnosisItem[]
-  treatment:    Partial<TreatmentPlanData> & { first_line: any[]; second_line: any[]; alternatives: any[] }
+  treatment:    Partial<TreatmentPlanData> & {
+    first_line:   DrugRegimen[]
+    second_line:  DrugRegimen[]
+    alternatives: DrugRegimen[]
+  }
   citations:    Citation[]
   annotations:  string[]
   turnId:       string | null
-  isStreaming:  boolean
   error:        string | null
 }
 
-const empty = (): StreamState => ({
+export interface StreamState {
+  turns:        Turn[]        // accumulated completed turns
+  currentTurn:  Turn          // in-progress turn
+  isStreaming:  boolean
+  lastQuery:    string | null // stored for retry on error
+}
+
+export const emptyTurn = (): Turn => ({
+  query:        "",
   thinking:     [],
   emergencies:  [],
   differential: [],
@@ -28,8 +45,14 @@ const empty = (): StreamState => ({
   citations:    [],
   annotations:  [],
   turnId:       null,
-  isStreaming:  false,
   error:        null,
+})
+
+const emptyState = (): StreamState => ({
+  turns:       [],
+  currentTurn: emptyTurn(),
+  isStreaming:  false,
+  lastQuery:   null,
 })
 
 // ── NDJSON reader ─────────────────────────────────────────────────────────────
@@ -48,20 +71,17 @@ async function* readNdjson(
 
   try {
     while (true) {
-      // Respect abort signal — reader.read() is not directly cancellable
-      // in older browsers, so we check manually after each read.
       const { value, done } = await reader.read()
       if (signal.aborted) return
       if (done) break
 
       buf += decoder.decode(value, { stream: true })
 
-      // Consume every complete line in the buffer
       let nl: number
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl).trim()
         buf = buf.slice(nl + 1)
-        if (!line) continue          // skip blank lines
+        if (!line) continue
         try {
           yield JSON.parse(line) as SSEEvent
         } catch {
@@ -70,7 +90,6 @@ async function* readNdjson(
       }
     }
   } finally {
-    // Always release the lock so the response body can be GC'd
     reader.releaseLock()
   }
 }
@@ -78,7 +97,7 @@ async function* readNdjson(
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useStream(sessionId: string) {
-  const [state, setState] = useState<StreamState>(empty)
+  const [state, setState] = useState<StreamState>(emptyState)
   const abortRef = useRef<AbortController | null>(null)
 
   const send = useCallback(async (query: string) => {
@@ -86,7 +105,18 @@ export function useStream(sessionId: string) {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
-    setState({ ...empty(), isStreaming: true })
+    // Push any non-empty currentTurn into history, then start fresh
+    setState(prev => {
+      const newTurns = hasTurnContent(prev.currentTurn)
+        ? [...prev.turns, prev.currentTurn]
+        : prev.turns
+      return {
+        turns:       newTurns,
+        currentTurn: { ...emptyTurn(), query },
+        isStreaming:  true,
+        lastQuery:   query,
+      }
+    })
 
     try {
       const res = await fetch(`/api/sessions/${sessionId}/turns`, {
@@ -97,25 +127,38 @@ export function useStream(sessionId: string) {
         },
         body:   JSON.stringify({ query }),
         signal: ctrl.signal,
-        // Prevent the browser from buffering the response
-        // (required in some Chromium versions with compression)
         cache:  "no-store",
       })
 
       if (!res.ok || !res.body) {
         const msg = await res.text().catch(() => "Erreur réseau")
-        setState(s => ({ ...s, error: msg, isStreaming: false }))
+        setState(s => ({
+          ...s,
+          currentTurn: { ...s.currentTurn, error: msg },
+          isStreaming: false,
+        }))
         return
       }
 
       for await (const event of readNdjson(res.body, ctrl.signal)) {
         if (ctrl.signal.aborted) break
-        setState(s => applyEvent(s, event))
+        setState(s => ({
+          ...s,
+          currentTurn: applyEvent(s.currentTurn, event),
+          // "done" and "error" events stop streaming
+          isStreaming: event.type === "done" || event.type === "error"
+            ? false
+            : s.isStreaming,
+        }))
       }
 
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return
-      setState(s => ({ ...s, error: String(err), isStreaming: false }))
+      setState(s => ({
+        ...s,
+        currentTurn: { ...s.currentTurn, error: String(err) },
+        isStreaming: false,
+      }))
     }
   }, [sessionId])
 
@@ -124,52 +167,76 @@ export function useStream(sessionId: string) {
     setState(s => ({ ...s, isStreaming: false }))
   }, [])
 
-  return { state, send, abort }
+  const retry = useCallback(() => {
+    if (state.lastQuery) {
+      send(state.lastQuery)
+    }
+  }, [state.lastQuery, send])
+
+  return { state, send, abort, retry }
 }
 
-// ── Pure reducer — no setState inside ────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-function applyEvent(s: StreamState, ev: SSEEvent): StreamState {
+/** Returns true if a turn has any meaningful content (not just an empty shell). */
+function hasTurnContent(turn: Turn): boolean {
+  return (
+    turn.thinking.length > 0 ||
+    turn.differential.length > 0 ||
+    turn.emergencies.length > 0 ||
+    turn.citations.length > 0 ||
+    turn.annotations.length > 0 ||
+    turn.treatment.first_line.length > 0 ||
+    turn.treatment.second_line.length > 0 ||
+    turn.treatment.alternatives.length > 0 ||
+    turn.turnId !== null ||
+    turn.error !== null
+  )
+}
+
+// ── Pure reducer — applies a single NDJSON event to a Turn ───────────────────
+
+export function applyEvent(turn: Turn, ev: SSEEvent): Turn {
   switch (ev.type) {
     case "thinking":
-      return { ...s, thinking: [...s.thinking, ev.content] }
+      return { ...turn, thinking: [...turn.thinking, ev.content] }
 
     case "emergency_flag":
-      return { ...s, emergencies: [...s.emergencies, ev.flag] }
+      return { ...turn, emergencies: [...turn.emergencies, ev.flag] }
 
     case "differential_item":
       return {
-        ...s,
-        differential: [...s.differential.filter(d => d.rank !== ev.item.rank), ev.item]
+        ...turn,
+        differential: [...turn.differential.filter(d => d.rank !== ev.item.rank), ev.item]
                         .sort((a, b) => a.rank - b.rank),
       }
 
     case "treatment_line": {
       const tier = ev.tier as "first_line" | "second_line" | "alternatives"
       return {
-        ...s,
+        ...turn,
         treatment: {
-          ...s.treatment,
-          [tier]: [...(s.treatment[tier as keyof typeof s.treatment] as any[] ?? []), ev.drug],
+          ...turn.treatment,
+          [tier]: [...(turn.treatment[tier] ?? []), ev.drug],
         },
       }
     }
 
     case "citation":
-      return s.citations.some(c => c.ref_id === ev.citation.ref_id)
-        ? s
-        : { ...s, citations: [...s.citations, ev.citation] }
+      return turn.citations.some(c => c.ref_id === ev.citation.ref_id)
+        ? turn
+        : { ...turn, citations: [...turn.citations, ev.citation] }
 
     case "validation":
-      return { ...s, annotations: ev.annotations }
+      return { ...turn, annotations: ev.annotations }
 
     case "error":
-      return { ...s, error: ev.message, isStreaming: false }
+      return { ...turn, error: ev.message }
 
     case "done":
-      return { ...s, turnId: ev.turn_id, isStreaming: false }
+      return { ...turn, turnId: ev.turn_id }
 
     default:
-      return s
+      return turn
   }
 }

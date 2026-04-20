@@ -746,17 +746,29 @@ from starlette.requests import Request
 
 _app = FastAPI(title="TropiCare MCP Tools", version="1.0.0")
 
-# Collect all registered tool functions by name
+# Collect all registered tool functions by name, along with their input types
 _TOOLS: dict[str, Any] = {}
-for _name in [
-    "vector_search", "bm25_search", "cross_encode_rerank",
-    "epid_calendar", "formulary_lookup", "amr_lookup",
-    "drug_ddi_check", "safety_classifier", "symptom_extractor",
-    "citation_formatter", "hybrid_retrieve",
-]:
+_TOOL_INPUT_TYPES: dict[str, type[BaseModel] | None] = {}
+
+_TOOL_REGISTRY: list[tuple[str, type[BaseModel] | None]] = [
+    ("vector_search",       VectorSearchInput),
+    ("bm25_search",         BM25SearchInput),
+    ("cross_encode_rerank", RerankInput),
+    ("epid_calendar",       EpidCalendarInput),
+    ("formulary_lookup",    FormularyLookupInput),
+    ("amr_lookup",          AMRLookupInput),
+    ("drug_ddi_check",      DDICheckInput),
+    ("safety_classifier",   SafetyClassInput),
+    ("symptom_extractor",   SymptomExtractorInput),
+    ("citation_formatter",  CitationFormatterInput),
+    ("hybrid_retrieve",     HybridRetrieveInput),
+]
+
+for _name, _input_type in _TOOL_REGISTRY:
     _fn = globals().get(_name)
     if _fn is not None:
         _TOOLS[_name] = _fn
+        _TOOL_INPUT_TYPES[_name] = _input_type
 
 
 @_app.get("/health")
@@ -770,19 +782,12 @@ async def call_tool(tool_name: str, request: Request):
     if fn is None:
         return JSONResponse({"error": f"Unknown tool: {tool_name}"}, status_code=404)
     kwargs = await request.json()
-    # Each tool expects a single Pydantic input object; find its type hint
-    import inspect
-    sig = inspect.signature(fn)
-    params = list(sig.parameters.values())
-    if params:
-        input_type = params[0].annotation
-        if input_type is not inspect.Parameter.empty:
-            inp = input_type(**kwargs)
-            result = await fn(inp)
-        else:
-            result = await fn(**kwargs)
+    input_type = _TOOL_INPUT_TYPES.get(tool_name)
+    if input_type is not None:
+        inp = input_type(**kwargs)
+        result = await fn(inp)
     else:
-        result = await fn()
+        result = await fn(**kwargs)
     # Serialize result
     if isinstance(result, list):
         return [item.model_dump() if hasattr(item, "model_dump") else item for item in result]

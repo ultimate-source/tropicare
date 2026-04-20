@@ -1,10 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/utils.ts
+// components/LangUpdater.tsx — syncs Zustand language to <html lang="">
 // ─────────────────────────────────────────────────────────────────────────────
-import { type ClassValue, clsx } from "clsx"
-import { twMerge } from "tailwind-merge"
+"use client"
 
-/** Merge Tailwind classes without conflicts. */
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+import { useEffect } from "react"
+import { useAppStore } from "@/lib/store"
+
+export default function LangUpdater(): null {
+  const language = useAppStore((s) => s.language)
+
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
+
+  return null
 }

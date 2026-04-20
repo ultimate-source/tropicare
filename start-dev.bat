@@ -87,16 +87,42 @@ set retries=30
 :wait_qdrant_loop
 if %retries% leq 0 (
     echo   [!] Qdrant did not become healthy in time
-    goto :summary
+    goto :atlas_index
 )
 curl -sf http://localhost:6333/healthz >nul 2>&1
 if %errorlevel% equ 0 (
     echo   [OK] Qdrant is ready
-    goto :summary
+    goto :atlas_index
 )
 set /a retries=%retries%-1
 timeout /t 2 /nobreak >nul
 goto :wait_qdrant_loop
+
+REM ── MongoDB Atlas vector search index (if using Atlas) ──────────────────────
+:atlas_index
+findstr /B "MONGODB_URI=mongodb+srv" .env >nul 2>&1
+if %errorlevel% equ 0 (
+    echo   [..] MongoDB Atlas detected — ensuring vector search index exists...
+    python scripts\setup_atlas_index.py
+    if %errorlevel% neq 0 (
+        echo   [!] Atlas index setup failed (see output above^)
+    )
+)
+
+REM ── Ingest knowledge base documents (if any) ───────────────────────────────
+:ingest_docs
+set DOC_COUNT=0
+for %%f in (docs\medic\*.pdf docs\medic\*.docx) do set /a DOC_COUNT+=1
+if %DOC_COUNT% gtr 0 (
+    echo   [..] Found %DOC_COUNT% document(s^) in docs\medic\ — ingesting into knowledge base...
+    python scripts\ingest_docs.py --gateway http://localhost:8000
+    if %errorlevel% neq 0 (
+        echo   [!] Document ingestion had errors (see output above^)
+    )
+) else (
+    echo   [!] No PDF/DOCX files in docs\medic\ — knowledge base will be empty
+    echo   [!] Place clinical guidelines there and re-run, or run: python scripts\ingest_docs.py
+)
 
 REM ── Summary ─────────────────────────────────────────────────────────────────
 :summary

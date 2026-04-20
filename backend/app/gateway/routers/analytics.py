@@ -2,7 +2,6 @@
 # tropicare_gateway/routers/analytics.py
 # ─────────────────────────────────────────────────────────────────────────────
 
-import json
 from datetime import date, timedelta
 
 import asyncpg
@@ -331,7 +330,8 @@ async def list_eval_reports(
     _user:   dict = Depends(require_role("admin")),
 ):
     """Return the latest eval report from the eval_reports/ directory."""
-    import os, json as _json
+    import os
+    import json as _json
     from pathlib import Path
 
     report_dir = Path(os.getenv("EVAL_REPORTS_DIR", "eval_reports"))

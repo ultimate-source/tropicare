@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   if (!ct.includes("application/json")) {
     if (!upstream.ok) {
-      const err = await upstream.text().catch(() => "")
+      await upstream.text().catch(() => "")
       const msg = upstream.status === 409
         ? "Cette adresse e-mail est déjà utilisée."
         : upstream.status === 422
@@ -44,8 +44,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (!upstream.ok) {
-    const err = await upstream.json().catch(() => ({ detail: "Registration failed" }))
-    return NextResponse.json(err, { status: upstream.status })
+    const errBody = await upstream.json().catch(() => ({ detail: "Registration failed" }))
+    return NextResponse.json(errBody, { status: upstream.status })
   }
   return NextResponse.json(await upstream.json(), { status: 201 })
 }

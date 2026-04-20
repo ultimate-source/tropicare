@@ -106,7 +106,11 @@ class DiagnosticAgent(BaseAgent):
             tool_warnings.append("Données épidémiologiques indisponibles (epid_calendar)")
 
         # ── Step 2: hybrid retrieval (3 query expansions) ───────────────────
-        symptoms    = [s.get("normalized", s.get("text", "")) for s in ctx.get("symptoms", [])]
+        raw_symptoms = ctx.get("symptoms", [])
+        symptoms = [
+            (s.get("normalized", s.get("text", "")) if isinstance(s, dict) else str(s))
+            for s in raw_symptoms
+        ]
         region_str  = ctx.get("region", "")
         q_main      = query
         q_symptoms  = " ".join(symptoms[:4])
@@ -278,6 +282,8 @@ class DiagnosticAgent(BaseAgent):
     async def _parse_output(self, raw: str, citations=None, epid_alerts=None,
                             patient_context=None, **_) -> dict:
         data = self._extract_json(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
 
         # ── Detect emergency conditions from patient symptoms/context ────────
         emergency_flags = list(data.get("emergency_flags", []))
@@ -347,8 +353,11 @@ class DiagnosticAgent(BaseAgent):
         parts = []
         parts.append(ctx.get("chief_complaint", ""))
         for s in ctx.get("symptoms", []):
-            parts.append(s.get("text", ""))
-            parts.append(s.get("normalized", "") or "")
+            if isinstance(s, dict):
+                parts.append(s.get("text", ""))
+                parts.append(s.get("normalized", "") or "")
+            else:
+                parts.append(str(s))
         for lab in ctx.get("lab_results", []):
             parts.append(lab.get("name", ""))
             parts.append(lab.get("value", ""))

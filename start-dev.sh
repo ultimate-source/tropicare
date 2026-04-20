@@ -74,6 +74,22 @@ wait_for "Gateway"     "http://localhost:8000/api/v1/health"
 wait_for "Qdrant"      "http://localhost:6333/healthz"
 wait_for "MCP Tools"   "http://localhost:8001/health"
 
+# ── MongoDB Atlas vector search index (if using Atlas) ────────────────────────
+if grep -q "^MONGODB_URI=mongodb+srv" .env 2>/dev/null; then
+    info "MongoDB Atlas detected — ensuring vector search index exists..."
+    python scripts/setup_atlas_index.py || warn "Atlas index setup failed (see output above)"
+fi
+
+# ── Ingest knowledge base documents (if any) ─────────────────────────────────
+DOC_COUNT=$(find docs/medic -maxdepth 1 -type f \( -name '*.pdf' -o -name '*.docx' \) 2>/dev/null | wc -l)
+if [ "$DOC_COUNT" -gt 0 ]; then
+    info "Found $DOC_COUNT document(s) in docs/medic/ — ingesting into knowledge base..."
+    python scripts/ingest_docs.py --gateway http://localhost:8000 || warn "Document ingestion had errors (see output above)"
+else
+    warn "No PDF/DOCX files in docs/medic/ — knowledge base will be empty"
+    warn "  Place clinical guidelines there and re-run, or run: python scripts/ingest_docs.py"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "  ╔══════════════════════════════════════════════════╗"

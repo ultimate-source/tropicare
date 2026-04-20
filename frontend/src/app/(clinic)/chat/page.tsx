@@ -3,34 +3,45 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use client"
 
-import { useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/lib/store"
 import { IntakeForm }  from "@/components/intake/IntakeForm"
 import { ChatStream }  from "@/components/chat/ChatStream"
 import { Spinner }     from "@/components/LoadingSkeleton"
+import { ApiErrorBanner } from "@/components/ui/ApiErrorBanner"
 import type { PatientContext } from "@/lib/types"
 
 type Phase = "intake" | "loading" | "chat"
 
 export default function ChatPage() {
-  const { language, setSession } = useAppStore()
+  const { language, setSession, clearDismissedAlerts } = useAppStore()
   const [phase,     setPhase]    = useState<Phase>("intake")
   const [sessionId, setSessionId]= useState<string | null>(null)
   const [error,     setError]    = useState<string | null>(null)
+  const lastContextRef           = useRef<PatientContext | null>(null)
 
-  async function handleIntakeComplete(context: PatientContext) {
+  const handleIntakeComplete = useCallback(async (context: PatientContext) => {
+    lastContextRef.current = context
+    setError(null)
     setPhase("loading")
     try {
       const { session_id } = await api.sessions.create(context, language)
       setSessionId(session_id)
       setSession({ sessionId: session_id, language, createdAt: new Date().toISOString() })
+      clearDismissedAlerts()
       setPhase("chat")
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur lors de la création de la session")
       setPhase("intake")
     }
-  }
+  }, [language, setSession, clearDismissedAlerts])
+
+  const retrySessionCreation = useCallback(() => {
+    if (lastContextRef.current) {
+      handleIntakeComplete(lastContextRef.current)
+    }
+  }, [handleIntakeComplete])
 
   return (
     <div className="flex h-full flex-col">
@@ -56,8 +67,8 @@ export default function ChatPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden p-4">
         {error && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
+          <div className="mb-4">
+            <ApiErrorBanner error={error} onRetry={retrySessionCreation} />
           </div>
         )}
 

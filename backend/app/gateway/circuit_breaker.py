@@ -6,7 +6,6 @@ from __future__ import annotations
 import time
 import threading
 from enum import Enum
-from typing import Any
 
 
 class CircuitState(str, Enum):

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     MODEL:             str = "claude-sonnet-4-20250514"
     CORS_ORIGINS:      list[str] = ["http://localhost:3000"]
     JWT_PUBLIC_KEY_PATH: str = "keys/public.pem"
+    SESSION_RETENTION_DAYS: int = 365
 
     class Config:
         env_file = ".env"

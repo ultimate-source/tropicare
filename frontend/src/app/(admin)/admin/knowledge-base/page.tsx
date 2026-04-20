@@ -34,7 +34,7 @@ export default function KnowledgeBasePage() {
     }
   }
 
-  useEffect(() => { loadDocs() }, [])
+  useEffect(() => { loadDocs() }, []) // eslint-disable-line react-hooks/set-state-in-effect
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault()

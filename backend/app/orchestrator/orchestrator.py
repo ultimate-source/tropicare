@@ -4,19 +4,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import time
-import uuid
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from ..agents.base import MCPClient, AgentSpan
 from ..agents.intake import IntakeAgent
 from ..agents.diagnostic import DiagnosticAgent
 from ..agents.antibiotherapy import AntibiotherapyAgent, _AMR_RESISTANCE_THRESHOLD
 from ..agents.validation import ValidationAgent
-from ..models.schemas import PatientContext, ConsultationResponse
 from .session import SessionStore
 from .audit import AuditLogger
 
@@ -125,7 +122,8 @@ class Orchestrator:
 
                 if diag_result is None:
                     yield {"type": "error", "message": _localized_error(language)}
-                    diag_result = {}
+                    await self._audit(session_id, turn_id, "error", {"error": "diagnostic agent returned None"}, t0)
+                    return
 
                 # Emit tool failure warnings from diagnostic agent
                 for tw in diag_result.get("_tool_warnings", []):
@@ -153,6 +151,24 @@ class Orchestrator:
                     output_type="diagnostic",
                 )
                 verdict = val_result.get("global_verdict", "PASS")
+
+                # Downgrade BLOCK to WARN if the diagnostic agent actually
+                # produced a valid differential — the validation agent may
+                # over-block when the knowledge base is empty and there are
+                # no citations, but the differential itself is still useful.
+                if verdict == "BLOCK" and diag_result.get("differential"):
+                    log.warning(
+                        "Validation BLOCK downgraded to WARN — diagnostic has %d items. Reason: %s",
+                        len(diag_result["differential"]),
+                        val_result.get("block_reason", "?"),
+                    )
+                    verdict = "WARN"
+                    val_result["global_verdict"] = "WARN"
+                    annotations = val_result.get("annotations", [])
+                    block_reason = val_result.get("block_reason", "")
+                    if block_reason and block_reason not in annotations:
+                        annotations.append(block_reason)
+                    val_result["annotations"] = annotations
 
                 if verdict == "BLOCK":
                     yield {

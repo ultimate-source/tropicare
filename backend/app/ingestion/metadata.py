@@ -29,15 +29,55 @@ _DISEASE_KEYWORDS: dict[str, str] = {
 }
 
 _DRUG_KEYWORDS: dict[str, str] = {
-    "artésunate": "P01BE03", "artéméther": "P01BE02",
-    "luméfantrine": "P01BF01",
-    "chloroquine": "P01BA01", "quinine": "P01BC01",
-    "ceftriaxone": "J01DD04", "amoxicilline": "J01CA04",
-    "azithromycine": "J01FA10", "doxycycline": "J01AA02",
-    "rifampicine": "J04AB02", "isoniazide": "J04AC01",
-    "cotrimoxazole": "J01EE01", "métronidazole": "P01AB01",
-    "fluconazole": "J02AC01", "praziquantel": "P02BA01",
-    "ivermectine": "P02CF01", "albendazole": "P02CA03",
+    # Antimalarials
+    "artésunate": "P01BE03", "artesunate": "P01BE03",
+    "artéméther": "P01BE02", "artemether": "P01BE02",
+    "luméfantrine": "P01BF01", "lumefantrine": "P01BF01",
+    "chloroquine": "P01BA01",
+    "quinine": "P01BC01",
+    "amodiaquine": "P01BA06",
+    "méfloquine": "P01BC02", "mefloquine": "P01BC02",
+    "primaquine": "P01BA03",
+    "pyriméthamine": "P01BD01", "pyrimethamine": "P01BD01",
+    "sulfadoxine": "P01BD51",
+    "dihydroartémisinine": "P01BE05", "dihydroartemisinin": "P01BE05",
+    "pipéraquine": "P01BF05", "piperaquine": "P01BF05",
+    # Antibiotics
+    "ceftriaxone": "J01DD04",
+    "amoxicilline": "J01CA04", "amoxicillin": "J01CA04",
+    "azithromycine": "J01FA10", "azithromycin": "J01FA10",
+    "doxycycline": "J01AA02",
+    "ciprofloxacine": "J01MA02", "ciprofloxacin": "J01MA02",
+    "gentamicine": "J01GB03", "gentamicin": "J01GB03",
+    "métronidazole": "P01AB01", "metronidazole": "P01AB01",
+    "cotrimoxazole": "J01EE01", "trimethoprim": "J01EE01",
+    "ampicilline": "J01CA01", "ampicillin": "J01CA01",
+    "clindamycine": "J01FF01", "clindamycin": "J01FF01",
+    "érythromycine": "J01FA01", "erythromycin": "J01FA01",
+    "pénicilline": "J01CE01", "penicillin": "J01CE01",
+    "chloramphénicol": "J01BA01", "chloramphenicol": "J01BA01",
+    "vancomycine": "J01XA01", "vancomycin": "J01XA01",
+    "céfixime": "J01DD08", "cefixime": "J01DD08",
+    # Anti-TB
+    "rifampicine": "J04AB02", "rifampicin": "J04AB02", "rifampin": "J04AB02",
+    "isoniazide": "J04AC01", "isoniazid": "J04AC01",
+    "éthambutol": "J04AK02", "ethambutol": "J04AK02",
+    "pyrazinamide": "J04AK01",
+    # Antifungals
+    "fluconazole": "J02AC01",
+    "amphotéricine": "J02AA01", "amphotericin": "J02AA01",
+    # Antiparasitics
+    "praziquantel": "P02BA01",
+    "ivermectine": "P02CF01", "ivermectin": "P02CF01",
+    "albendazole": "P02CA03",
+    "mébendazole": "P02CA01", "mebendazole": "P02CA01",
+    # Antivirals
+    "acyclovir": "J05AB01", "aciclovir": "J05AB01",
+    "oseltamivir": "J05AH02",
+    # ORS / supportive
+    "sro": "A07CA", "ors": "A07CA",
+    "zinc": "A12CB",
+    "paracétamol": "N02BE01", "paracetamol": "N02BE01", "acetaminophen": "N02BE01",
 }
 
 _CONTENT_TYPE_HINTS: dict[str, str] = {

@@ -66,13 +66,6 @@ export interface DiagnosisItem {
   citations: number[]
 }
 
-export interface ConfirmatoryTest {
-  name: string
-  priority: "urgent" | "standard" | "optional"
-  availability_togo: "disponible" | "limité" | "indisponible"
-  interpretation: string
-}
-
 // ── Urgences ──────────────────────────────────────────────────────────────────
 
 export interface EmergencyFlag {
@@ -109,11 +102,6 @@ export interface TreatmentPlanData {
   follow_up_guidance: string
   referral_criteria: string
   disclaimer: string
-}
-
-export interface Contraindicated {
-  drug: string
-  reason: string
 }
 
 // ── Citations ─────────────────────────────────────────────────────────────────

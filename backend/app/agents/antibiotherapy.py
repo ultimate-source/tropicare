@@ -235,6 +235,8 @@ class AntibiotherapyAgent(BaseAgent):
         **_,
     ) -> dict:
         data = self._extract_json(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
 
         # Guarantee disclaimer is always present
         data["disclaimer"] = MANDATORY_DISCLAIMER
