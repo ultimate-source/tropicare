@@ -3,14 +3,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 import asyncio
 import json
-import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import asyncpg
 import redis.exceptions
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -22,13 +21,13 @@ from .routers.analytics import router as analytics_router
 from .middleware import SecurityHeadersMiddleware, CSRFMiddleware
 from ..orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from ..orchestrator.session import SessionStore
+from ..orchestrator.session_repository import SessionRepository
+from ..orchestrator.dual_write import DualWriteSessionStore
 from ..orchestrator.audit import AuditLogger
-from .auth import require_role, get_current_user
+from .auth import require_role
 from .config import Settings
 from ..observability.tracing import init_tracing
 from ..observability.metrics import (
-    REQUEST_COUNT,
-    REQUEST_LATENCY,
     metrics_app,
 )
 from ..observability.logging import configure_logging
@@ -46,13 +45,17 @@ async def lifespan(app: FastAPI):
 
     # Startup
     pg_pool = await asyncpg.create_pool(settings.DATABASE_URL, min_size=2, max_size=10)
-    app.state.pg_pool      = pg_pool
-    app.state.session_store = SessionStore(settings.REDIS_URL)
+    app.state.pg_pool       = pg_pool
+    session_store           = SessionStore(settings.REDIS_URL)
+    session_repo            = SessionRepository(pg_pool, settings.SESSION_RETENTION_DAYS)
+    dual_write_store        = DualWriteSessionStore(session_store, session_repo)
+    app.state.session_store = dual_write_store
+    app.state.session_repo  = session_repo
     app.state.audit_logger  = AuditLogger(pg_pool)
     app.state.orchestrator  = Orchestrator(OrchestratorConfig(
         api_key=settings.ANTHROPIC_API_KEY,
         mcp_url=settings.MCP_URL,
-        session_store=app.state.session_store,
+        session_store=dual_write_store,
         audit_logger=app.state.audit_logger,
         model=settings.MODEL,
     ))
@@ -64,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="TropiCare API", version="1.0.0", lifespan=lifespan)
 
 # ── OpenTelemetry auto-instrumentation for FastAPI ────────────────────────────
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 FastAPIInstrumentor.instrument_app(app)
 
 app.include_router(auth_router)
@@ -88,7 +91,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CSRFMiddleware)
 
 # ── Request metrics middleware ────────────────────────────────────────────────
-from ..observability.metrics import MetricsMiddleware
+from ..observability.metrics import MetricsMiddleware  # noqa: E402
 app.add_middleware(MetricsMiddleware)
 
 # ── Dependency ────────────────────────────────────────────────────────────────
@@ -98,6 +101,9 @@ def get_orchestrator(request: Request) -> Orchestrator:
 
 def get_store(request: Request) -> SessionStore:
     return request.app.state.session_store
+
+def get_repo(request: Request) -> SessionRepository:
+    return request.app.state.session_repo
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -119,6 +125,37 @@ class FeedbackRequest(BaseModel):
     actual_diagnosis: str | None = Field(default=None, max_length=5000)
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/sessions")
+async def list_sessions(
+    request: Request,
+    user:    dict = Depends(require_role("clinician")),
+    store:   SessionStore = Depends(get_store),
+    repo:    SessionRepository = Depends(get_repo),
+    include_archived: bool = False,
+    limit:   int = 50,
+    offset:  int = 0,
+):
+    user_id = user["sub"]
+
+    # Archive sessions older than retention policy
+    await repo.archive_expired(user_id)
+
+    sessions, total = await repo.list_sessions(
+        user_id, include_archived=include_archived, limit=limit, offset=offset,
+    )
+
+    # Lazy close: for each 'active' session, check Redis existence
+    for s in sessions:
+        if s.get("status") == "active":
+            redis_data = await store.get(s["id"])
+            if not redis_data:
+                # Session expired from Redis — close it in PG
+                await repo.close_session(s["id"])
+                s["status"] = "closed"
+
+    return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
+
 
 @app.post(
     "/api/v1/sessions",
@@ -147,6 +184,7 @@ async def create_session(
             session_id=session_id,
             patient_context=body.patient_context,
             language=body.language,
+            user_id=user_id,
         )
         await store.register_session(user_id, session_id)
     except HTTPException:
@@ -165,7 +203,10 @@ async def get_session(
     user:       dict = Depends(require_role("clinician")),
     store:      SessionStore = Depends(get_store),
 ):
-    data = await store.get(session_id)
+    try:
+        data = await store.get_or_fallback(session_id)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Session service temporarily unavailable")
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     return data
@@ -293,6 +334,8 @@ async def upload_document(
     doc_id  = str(uuid.uuid4())
 
     # Write raw file to object storage (stub — replace with S3/MinIO client)
+    import os
+    os.makedirs("/tmp/kb_raw", exist_ok=True)
     raw_path = f"/tmp/kb_raw/{doc_id}_{file.filename}"
     with open(raw_path, "wb") as f:
         f.write(content)
@@ -309,8 +352,8 @@ async def upload_document(
 
     # Enqueue ingestion job via Redis ARQ
     import arq
-    redis = arq.create_pool(arq.connections.RedisSettings.from_dsn(settings.REDIS_URL))
-    await redis.enqueue_job("ingest_document", doc_id, raw_path, src_type)
+    redis_pool = await arq.create_pool(arq.connections.RedisSettings.from_dsn(settings.REDIS_URL))
+    await redis_pool.enqueue_job("ingest_document", doc_id, raw_path, src_type)
 
     return {"document_id": doc_id, "status": "queued"}
 

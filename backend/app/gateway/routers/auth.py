@@ -10,11 +10,13 @@ from functools import lru_cache
 
 import asyncpg
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from jose import jwt
 from pydantic import BaseModel, EmailStr, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+from ...orchestrator.session import SessionStore
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
@@ -136,8 +138,17 @@ def _safe_user(u: dict) -> dict:
 # ── Redis + lockout helpers ───────────────────────────────────────────────────
 
 def _redis(request: Request):
-    """Get the Redis client from the session store."""
-    return request.app.state.session_store._redis
+    """Get the raw Redis client from the session store.
+
+    Handles both plain SessionStore and DualWriteSessionStore (which wraps
+    a SessionStore as ._redis).
+    """
+    store = request.app.state.session_store
+    inner = store._redis
+    # If store is DualWriteSessionStore, inner is a SessionStore — unwrap once more
+    if isinstance(inner, SessionStore):
+        return inner._redis
+    return inner
 
 
 async def _check_lockout(request: Request, email: str) -> None:

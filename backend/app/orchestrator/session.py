@@ -19,11 +19,13 @@ class SessionStore:
         return f"session:{session_id}"
 
     async def create(self, session_id: str, patient_context: dict, language: str = "fr") -> None:
+        import datetime
         data = {
             "session_id":        session_id,
             "patient_context":   patient_context,
             "conversation_history": [],
             "language":          language,
+            "created_at":        datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         await self._redis.set(self._key(session_id), json.dumps(data), ex=self.TTL)
 
@@ -80,3 +82,40 @@ class SessionStore:
             await self._redis.srem(key, *expired)
 
         return len(session_ids) - len(expired)
+
+    async def list_user_sessions(self, user_id: str) -> list[dict]:
+        """Return summary dicts for all active sessions belonging to a user."""
+        key = self._user_sessions_key(user_id)
+        session_ids = await self._redis.smembers(key)
+        if not session_ids:
+            return []
+
+        summaries: list[dict] = []
+        expired: list[str] = []
+
+        for sid in session_ids:
+            data = await self.get(sid)
+            if not data:
+                expired.append(sid)
+                continue
+            history = data.get("conversation_history", [])
+            last_query = ""
+            for turn in reversed(history):
+                q = turn.get("query", "")
+                if q:
+                    last_query = q
+                    break
+            summaries.append({
+                "id":         sid,
+                "created_at": data.get("created_at", ""),
+                "language":   data.get("language", "fr"),
+                "turn_count": len(history),
+                "last_query": last_query,
+            })
+
+        if expired:
+            await self._redis.srem(key, *expired)
+
+        # Sort by created_at descending (newest first)
+        summaries.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+        return summaries

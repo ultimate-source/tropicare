@@ -3,7 +3,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
-import hashlib
 import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint

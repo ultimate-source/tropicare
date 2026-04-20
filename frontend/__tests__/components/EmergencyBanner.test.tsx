@@ -9,6 +9,21 @@ import "@testing-library/jest-dom"
 import { EmergencyBanner } from "@/components/chat/EmergencyBanner"
 import type { EmergencyFlag } from "@/lib/types"
 
+// ── Mock useTranslation ───────────────────────────────────────────────────────
+const translations: Record<string, string> = {
+  "emergency.critical": "URGENCE VITALE",
+  "emergency.urgent": "URGENCE",
+  "emergency.closeAriaLabel": "Fermer l'alerte",
+  "emergency.dismiss": "Pris en compte",
+}
+
+jest.mock("@/lib/i18n", () => ({
+  useTranslation: () => ({
+    t: (key: string) => translations[key] ?? key,
+    locale: "fr" as const,
+  }),
+}))
+
 function renderBanner(
   flag: EmergencyFlag,
   onDismiss = jest.fn(),

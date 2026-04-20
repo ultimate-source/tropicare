@@ -42,9 +42,9 @@ export const api = {
         body: JSON.stringify({ patient_context: patientContext, language }),
       }),
     get:  (id: string) =>
-      request<Record<string, unknown>>(`/api/sessions/${id}`),
+      request<SessionDetail>(`/api/sessions/${id}`),
     list: () =>
-      request<{ sessions: SessionSummary[] }>("/api/sessions"),
+      request<{ sessions: SessionSummary[]; total: number; limit: number; offset: number }>("/api/sessions"),
   },
 
   // ── Feedback ─────────────────────────────────────────────────────────────────
@@ -76,6 +76,28 @@ export const api = {
 }
 
 // ── Shared domain types ───────────────────────────────────────────────────────
+export interface TurnRecord {
+  turn_id:    string
+  turn_index: number
+  query:      string
+  response:   {
+    diag?:       Record<string, unknown>
+    anti?:       Record<string, unknown>
+    warnings?:   string[]
+    references?: Record<string, unknown>[]
+  }
+  created_at: string
+}
+
+export interface SessionDetail {
+  session_id:           string
+  patient_context:      Record<string, unknown>
+  language:             string
+  created_at:           string
+  status:               string
+  conversation_history: TurnRecord[]
+}
+
 export interface SessionSummary {
   id:         string
   created_at: string

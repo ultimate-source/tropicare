@@ -14,6 +14,7 @@ TropiCare combines a multi-agent LLM pipeline with Retrieval-Augmented Generatio
 - [Multi-Agent Pipeline](#multi-agent-pipeline)
 - [RAG Pipeline](#rag-pipeline)
 - [Quick Start](#quick-start)
+- [Knowledge Base Ingestion](#knowledge-base-ingestion)
 - [Environment Variables](#environment-variables)
 - [Make Commands](#make-commands)
 - [API Reference](#api-reference)
@@ -135,6 +136,7 @@ Deterministic quality gate (temperature = 0) checking: citation presence, numeri
 - Python 3.12+
 - Node.js 20+ and npm
 - API keys: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
+- MongoDB Atlas cluster (free M0 tier works) — or use the local Docker MongoDB
 
 ### Setup
 
@@ -144,6 +146,7 @@ Deterministic quality gate (temperature = 0) checking: citation presence, numeri
 git clone <repo-url> && cd tropicare
 cp .env.example .env
 # Fill in ANTHROPIC_API_KEY and OPENAI_API_KEY in .env
+# Optionally set MONGODB_URI to a MongoDB Atlas connection string
 ```
 
 **2. Generate JWT key pair (RS256)**
@@ -152,7 +155,17 @@ cp .env.example .env
 make keys
 ```
 
-**3. Start the full stack** (builds images, runs migrations, initializes MongoDB replica set)
+**3. Start the full stack** (builds images, runs migrations, sets up Atlas index if configured, ingests docs from `docs/medic/`)
+
+```bash
+# Linux/macOS
+./start-dev.sh
+
+# Windows
+start-dev.bat
+```
+
+Or manually:
 
 ```bash
 make up
@@ -218,6 +231,67 @@ npm run dev
 
 ---
 
+## Knowledge Base Ingestion
+
+The RAG pipeline requires clinical guideline documents to ground diagnostic and treatment recommendations. Without them, the LLM relies solely on its general training knowledge.
+
+### Recommended Documents
+
+| Document | Source | Type |
+|----------|--------|------|
+| Guidelines for the Treatment of Malaria (3rd ed.) | [iris.who.int](https://iris.who.int) | `guideline` |
+| Dengue: Diagnosis, Treatment, Prevention | [iris.who.int](https://iris.who.int) | `guideline` |
+| Managing Meningitis Epidemics in Africa | [iris.who.int](https://iris.who.int) | `guideline` |
+| Cholera Outbreak Response | [iris.who.int](https://iris.who.int) | `guideline` |
+| WHO Model List of Essential Medicines | [who.int/publications](https://www.who.int/publications) | `formulary` |
+| Liste Nationale des Médicaments Essentiels (LNME) | [came-togo.com](https://came-togo.com) | `formulary` |
+| Protocole National Paludisme — PNLP Togo | [sante.gouv.tg](https://sante.gouv.tg) | `epidemiology` |
+| WHO GLASS AMR Report | [who.int/glass](https://www.who.int/initiatives/glass) | `amr_data` |
+
+### Bulk Ingestion
+
+1. Download the PDFs and place them in `docs/medic/`
+2. Run the ingestion script (requires the gateway to be running):
+
+```bash
+python scripts/ingest_docs.py
+```
+
+The script authenticates as admin, uploads each PDF/DOCX, and enqueues background ingestion jobs. Files are auto-classified by filename keywords (e.g., `came-*` → formulary, `pnlp-*` → epidemiology). See `docs/medic/README.md` for naming conventions.
+
+To target a different gateway:
+
+```bash
+python scripts/ingest_docs.py --gateway http://gateway:8000
+```
+
+### Single Document Upload
+
+```bash
+curl -X POST http://localhost:8000/api/v1/admin/documents \
+  -H "Authorization: Bearer <admin_token>" \
+  -F "file=@docs/medic/who-malaria-treatment-guidelines.pdf" \
+  -F "title=WHO Malaria Treatment Guidelines 2022" \
+  -F "source_type=guideline" \
+  -F "version=2022"
+```
+
+Valid `source_type` values: `guideline`, `formulary`, `amr_data`, `epidemiology`.
+
+### Ingestion Pipeline
+
+Once uploaded, the ARQ background worker processes each document through:
+
+1. **Parsing** — section extraction from PDF/DOCX
+2. **Chunking** — 512 tokens max, 64 token overlap, sentence boundary respect
+3. **Metadata tagging** — disease tags, drug tags, content type
+4. **Embedding** — OpenAI `text-embedding-3-large` (3072 dimensions)
+5. **Storage** — PostgreSQL (BM25 full-text search) + MongoDB (vector search)
+
+Monitor ingestion progress via the admin documents endpoint: `GET /api/v1/admin/documents`.
+
+---
+
 ## Environment Variables
 
 | Variable               | Description                              | Default                                                      |
@@ -226,7 +300,7 @@ npm run dev
 | `OPENAI_API_KEY`       | OpenAI API key (embeddings)              | — (required)                                                 |
 | `DATABASE_URL`         | PostgreSQL connection URL                | `postgresql://tropicare:tropicare@localhost:5432/tropicare`   |
 | `REDIS_URL`            | Redis connection URL                     | `redis://localhost:6379/0`                                   |
-| `MONGODB_URI`          | MongoDB connection URI                   | `mongodb://localhost:27017`                                  |
+| `MONGODB_URI`          | MongoDB connection URI (Atlas or local)  | `mongodb://mongodb:27017/tropicare?replicaSet=rs0` (Docker default) |
 | `MONGODB_DB`           | MongoDB database name                    | `tropicare`                                                  |
 | `MCP_URL`              | MCP Tools Server URL                     | `http://localhost:8001`                                      |
 | `MODEL`                | LLM model identifier                     | `claude-sonnet-4-20250514`                                   |

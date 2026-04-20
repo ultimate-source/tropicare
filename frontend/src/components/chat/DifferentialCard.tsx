@@ -6,6 +6,7 @@
 import { useState } from "react"
 import type { DiagnosisItem, Citation } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useTranslation } from "@/lib/i18n"
 
 const PRIORITY_COLORS = {
   urgent:   "bg-red-100 text-red-700 border-red-200",
@@ -20,6 +21,7 @@ const AVAIL_COLORS = {
 
 export function DifferentialCard({ item, citations }: { item: DiagnosisItem; citations: Citation[] }) {
   const [expanded, setExpanded] = useState(item.rank === 1)
+  const { t } = useTranslation()
   const pct = Math.round(item.confidence * 100)
   const barColor = pct >= 70 ? "bg-blue-500" : pct >= 40 ? "bg-amber-400" : "bg-gray-300"
 
@@ -31,7 +33,8 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
       {/* Header row */}
       <button
         onClick={() => setExpanded(x => !x)}
-        aria-label={`${expanded ? "Réduire" : "Développer"} le diagnostic : ${item.disease_name}`}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? t("differential.collapse") : t("differential.expand")} : ${item.disease_name}`}
         className="flex w-full items-center gap-3 p-3 text-left"
       >
         {/* Rank badge */}
@@ -47,13 +50,27 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
           <p className="text-xs text-muted-foreground">{item.icd11_code}</p>
         </div>
 
-        {/* Confidence bar */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="w-20 h-2 rounded-full bg-muted overflow-hidden">
+        {/* Confidence bar + chevron — wraps below name on mobile */}
+        <div className="flex items-center gap-2 shrink-0 max-sm:basis-full max-sm:pl-10">
+          <div
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+            aria-label={t("differential.confidence", { pct })}
+            className="w-20 h-2 rounded-full bg-muted overflow-hidden"
+          >
             <div className={cn("h-full rounded-full", barColor)} style={{ width: `${pct}%` }} />
           </div>
           <span className="text-xs font-medium text-muted-foreground w-8">{pct}%</span>
-          <span className="text-muted-foreground text-xs">{expanded ? "▲" : "▼"}</span>
+          {/* CSS chevron */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "inline-block h-2 w-2 border-r-2 border-b-2 border-current text-muted-foreground transition-transform duration-200",
+              expanded ? "-rotate-135" : "rotate-45",
+            )}
+          />
         </div>
       </button>
 
@@ -64,7 +81,7 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
           {/* Red flags */}
           {item.red_flags.length > 0 && (
             <div className="rounded-md bg-red-50 border border-red-200 p-2">
-              <p className="text-xs font-semibold text-red-700 mb-1">Signes d'alarme</p>
+              <p className="text-xs font-semibold text-red-700 mb-1">{t("differential.redFlags")}</p>
               {item.red_flags.map((f, i) => (
                 <p key={i} className="text-xs text-red-700">• {f}</p>
               ))}
@@ -74,7 +91,7 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
           {/* Evidence */}
           {item.supporting_evidence.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground mb-1">Arguments pour</p>
+              <p className="text-xs font-semibold text-muted-foreground mb-1">{t("differential.supporting")}</p>
               {item.supporting_evidence.map((e, i) => (
                 <p key={i} className="text-xs text-foreground">✓ {e}</p>
               ))}
@@ -82,7 +99,7 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
           )}
           {item.against_evidence.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground mb-1">Arguments contre</p>
+              <p className="text-xs font-semibold text-muted-foreground mb-1">{t("differential.against")}</p>
               {item.against_evidence.map((e, i) => (
                 <p key={i} className="text-xs text-muted-foreground">✗ {e}</p>
               ))}
@@ -92,18 +109,18 @@ export function DifferentialCard({ item, citations }: { item: DiagnosisItem; cit
           {/* Tests */}
           {item.confirmatory_tests.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground mb-1">Examens complémentaires</p>
+              <p className="text-xs font-semibold text-muted-foreground mb-1">{t("differential.tests")}</p>
               <div className="space-y-1">
-                {item.confirmatory_tests.map((t, i) => (
+                {item.confirmatory_tests.map((test, i) => (
                   <div key={i} className="flex items-start gap-2 text-xs">
                     <span className={cn("mt-0.5 rounded border px-1 py-0.5 font-medium shrink-0",
-                      PRIORITY_COLORS[t.priority])}>
-                      {t.priority}
+                      PRIORITY_COLORS[test.priority])}>
+                      {test.priority}
                     </span>
-                    <span className={cn("font-medium", AVAIL_COLORS[t.availability_togo])}>
-                      {t.name}
+                    <span className={cn("font-medium", AVAIL_COLORS[test.availability_togo])}>
+                      {test.name}
                     </span>
-                    <span className="text-muted-foreground">— {t.interpretation}</span>
+                    <span className="text-muted-foreground">— {test.interpretation}</span>
                   </div>
                 ))}
               </div>

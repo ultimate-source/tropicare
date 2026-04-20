@@ -5,8 +5,8 @@
 x-common-env: &common-env
   DATABASE_URL:       postgresql://tropicare:tropicare@postgres:5432/tropicare
   REDIS_URL:          redis://redis:6379/0
-  MONGODB_URI:        mongodb://mongodb:27017/tropicare?replicaSet=rs0&directConnection=true
-  MONGODB_DB:         tropicare
+  MONGODB_URI:        ${MONGODB_URI:-mongodb://mongodb:27017/tropicare?replicaSet=rs0&directConnection=true}
+  MONGODB_DB:         ${MONGODB_DB:-tropicare}
   MCP_URL:            http://mcp-tools:8001
   MODEL:              claude-sonnet-4-20250514
 
@@ -45,10 +45,11 @@ services:
       timeout: 3s
       retries: 10
 
-  # ── MongoDB ──────────────────────────────────────────────────────────────────
+  # ── MongoDB (local dev only — skip when using Atlas via MONGODB_URI) ────────
   mongodb:
     image: mongo:7-jammy
     restart: unless-stopped
+    profiles: ["local-mongo"]
     command: ["--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongo_data:/data/db
@@ -63,6 +64,7 @@ services:
   # ── MongoDB replica set init (runs once) ────────────────────────────────────
   mongo-init:
     image: mongo:7-jammy
+    profiles: ["local-mongo"]
     depends_on:
       mongodb: {condition: service_healthy}
     restart: "no"
@@ -90,14 +92,15 @@ services:
       context: .
       dockerfile: docker/Dockerfile.mcp
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       <<: *common-env
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       postgres:   {condition: service_healthy}
       redis:      {condition: service_healthy}
-      mongodb:    {condition: service_healthy}
-      mongo-init: {condition: service_completed_successfully}
     ports:
       - "8001:8001"
     healthcheck:
@@ -112,6 +115,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.gateway
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       <<: *common-env
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -123,11 +129,12 @@ services:
     secrets:
       - jwt_public.pem
       - jwt_private.pem
+    volumes:
+      - kb_raw:/tmp/kb_raw
     depends_on:
       postgres:   {condition: service_healthy}
       redis:      {condition: service_healthy}
       mcp-tools:  {condition: service_healthy}
-      mongo-init: {condition: service_completed_successfully}
       migrate:    {condition: service_completed_successfully}
     ports:
       - "8000:8000"
@@ -143,6 +150,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       <<: *common-env
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -151,7 +161,6 @@ services:
     depends_on:
       postgres:   {condition: service_healthy}
       redis:      {condition: service_healthy}
-      mongo-init: {condition: service_completed_successfully}
 
   # ── Next.js Frontend ─────────────────────────────────────────────────────────
   frontend:
